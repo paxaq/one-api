@@ -7,26 +7,26 @@
 
 @layer base {
   :root {
-    /* Slate & Teal — clean, modern, data-forward */
-    --background: 220 10% 98%;
-    --foreground: 220 15% 10%;
-    --card: 220 8% 99%;
-    --card-foreground: 220 15% 10%;
-    --popover: 220 8% 99%;
-    --popover-foreground: 220 15% 10%;
-    --primary: 220 15% 28%;
-    --primary-foreground: 220 10% 98%;
-    --secondary: 220 8% 94%;
-    --secondary-foreground: 220 15% 14%;
-    --muted: 220 6% 93%;
-    --muted-foreground: 220 5% 44%;
-    --accent: 172 60% 40%;
-    --accent-foreground: 220 15% 10%;
+    /* Mint & Forest — white surfaces with a faint green undertone */
+    --background: 150 28% 98%;
+    --foreground: 155 22% 11%;
+    --card: 150 24% 99%;
+    --card-foreground: 155 22% 11%;
+    --popover: 150 24% 99%;
+    --popover-foreground: 155 22% 11%;
+    --primary: 158 48% 30%;
+    --primary-foreground: 150 30% 98%;
+    --secondary: 150 18% 94%;
+    --secondary-foreground: 155 22% 16%;
+    --muted: 150 14% 93%;
+    --muted-foreground: 155 10% 42%;
+    --accent: 158 55% 40%;
+    --accent-foreground: 150 30% 98%;
     --destructive: 4 62% 50%;
     --destructive-foreground: 0 0% 100%;
-    --border: 220 8% 89%;
-    --input: 220 8% 89%;
-    --ring: 172 60% 40%;
+    --border: 150 16% 88%;
+    --input: 150 16% 88%;
+    --ring: 158 55% 40%;
     /* Chart: vivid, well-separated across the color wheel */
     --chart-1: 172 65% 38%;
     --chart-2: 24 80% 52%;
@@ -63,26 +63,26 @@
   }
 
   .dark {
-    /* Slate & Teal — dark mode */
-    --background: 220 12% 8%;
-    --foreground: 220 8% 92%;
-    --card: 220 10% 10%;
-    --card-foreground: 220 8% 92%;
-    --popover: 220 10% 10%;
-    --popover-foreground: 220 8% 92%;
-    --primary: 172 50% 50%;
-    --primary-foreground: 220 12% 8%;
-    --secondary: 220 8% 16%;
-    --secondary-foreground: 220 8% 92%;
-    --muted: 220 8% 16%;
-    --muted-foreground: 220 6% 55%;
-    --accent: 172 50% 50%;
-    --accent-foreground: 220 12% 8%;
+    /* Mint & Forest — near-black surfaces with a faint green undertone */
+    --background: 155 22% 7%;
+    --foreground: 150 14% 92%;
+    --card: 155 20% 9%;
+    --card-foreground: 150 14% 92%;
+    --popover: 155 20% 9%;
+    --popover-foreground: 150 14% 92%;
+    --primary: 152 52% 56%;
+    --primary-foreground: 155 24% 8%;
+    --secondary: 155 16% 14%;
+    --secondary-foreground: 150 14% 92%;
+    --muted: 155 16% 14%;
+    --muted-foreground: 150 10% 60%;
+    --accent: 152 52% 56%;
+    --accent-foreground: 155 24% 8%;
     --destructive: 4 55% 42%;
-    --destructive-foreground: 220 8% 92%;
-    --border: 220 8% 18%;
-    --input: 220 8% 18%;
-    --ring: 172 50% 50%;
+    --destructive-foreground: 150 14% 92%;
+    --border: 155 14% 18%;
+    --input: 155 14% 18%;
+    --ring: 152 52% 56%;
     /* Chart: boosted lightness for dark backgrounds */
     --chart-1: 172 60% 50%;
     --chart-2: 24 75% 58%;
