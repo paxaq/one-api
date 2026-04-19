@@ -1,10 +1,22 @@
 import { Button } from '@/components/ui/button';
-import { Form, FormControl, FormField, FormItem, FormMessage } from '@/components/ui/form';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
+import { Input } from '@/components/ui/input';
 import { ResponsivePageContainer } from '@/components/ui/responsive-container';
 import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/lib/stores/auth';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { ArrowUpRight, RotateCw } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowUpRight,
+  CheckCircle2,
+  Clock,
+  CreditCard,
+  Mail,
+  RefreshCw,
+  Ticket,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
@@ -12,18 +24,17 @@ import { useLocation } from 'react-router-dom';
 import * as z from 'zod';
 
 const QUOTA_PER_UNIT_FALLBACK = 500000;
+const PRESET_AMOUNTS = [20, 50, 100, 200, 500] as const;
+const MIN_TOPUP_USD = 20;
 
 function readQuotaPerUnit(): number {
   const raw = parseFloat(localStorage.getItem('quota_per_unit') || `${QUOTA_PER_UNIT_FALLBACK}`);
   return Number.isFinite(raw) && raw > 0 ? raw : QUOTA_PER_UNIT_FALLBACK;
 }
 
-function formatBalance(quota: number): { dollars: string; cents: string } {
+function formatUSD(quota: number): string {
   const usd = quota / readQuotaPerUnit();
-  const fixed = usd.toFixed(2);
-  const [d, c] = fixed.split('.');
-  const withGrouping = Number(d).toLocaleString('en-US');
-  return { dollars: withGrouping, cents: c };
+  return usd.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function TopUpPage() {
@@ -41,6 +52,16 @@ export function TopUpPage() {
   const [topUpLink, setTopUpLink] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
+  type HistoryEntry = {
+    id: number;
+    created_at: number;
+    quota: number;
+    content?: string;
+    source: 'stripe' | 'code' | 'admin' | 'system' | 'other';
+  };
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+
   const stripeOutcome = useMemo<'success' | 'cancel' | null>(() => {
     if (location.pathname.endsWith('/topup/success')) return 'success';
     if (location.pathname.endsWith('/topup/cancel')) return 'cancel';
@@ -48,17 +69,16 @@ export function TopUpPage() {
   }, [location.pathname]);
 
   // ─── Forms ────────────────────────────────────────────────────────
-  const minTopUpUSD = 20;
   const stripeSchema = z.object({
     amount_usd: z.coerce
       .number({ invalid_type_error: tr('stripe.required', 'Enter an amount in USD') })
-      .min(minTopUpUSD, tr('stripe.min', `Minimum is $${minTopUpUSD}`, { value: minTopUpUSD }))
+      .min(MIN_TOPUP_USD, tr('stripe.min', `Minimum is $${MIN_TOPUP_USD}`, { value: MIN_TOPUP_USD }))
       .max(100000, tr('stripe.max', 'Amount too large')),
   });
   type StripeForm = z.infer<typeof stripeSchema>;
   const stripeForm = useForm<StripeForm>({
     resolver: zodResolver(stripeSchema),
-    defaultValues: { amount_usd: minTopUpUSD },
+    defaultValues: { amount_usd: MIN_TOPUP_USD },
   });
   const [isStripeSubmitting, setIsStripeSubmitting] = useState(false);
 
@@ -101,9 +121,50 @@ export function TopUpPage() {
     }
   };
 
+  const classifySource = (content: string): HistoryEntry['source'] => {
+    const c = content.toLowerCase();
+    if (c.includes('stripe')) return 'stripe';
+    if (c.includes('redemption') || c.includes('redeem') || c.includes('code')) return 'code';
+    if (c.includes('admin') || c.includes('via api')) return 'admin';
+    if (c.includes('welcome') || c.includes('system')) return 'system';
+    return 'other';
+  };
+
+  const loadHistory = async () => {
+    setIsHistoryLoading(true);
+    try {
+      // type=1 → LogTypeTopup (covers both Stripe and redemption code grants)
+      const res = await api.get('/api/log/self?type=1&p=0&size=10&sort=created_at&order=desc');
+      const { success, data, items } = res.data || {};
+      const rows: any[] = Array.isArray(items)
+        ? items
+        : Array.isArray(data)
+        ? data
+        : Array.isArray(data?.items)
+        ? data.items
+        : [];
+      if (success || rows.length) {
+        setHistory(
+          rows.map((r) => ({
+            id: r.id,
+            created_at: r.created_at,
+            quota: r.quota ?? 0,
+            content: r.content || '',
+            source: classifySource(r.content || ''),
+          }))
+        );
+      }
+    } catch (error) {
+      console.error('Error loading topup history:', error);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
+
   useEffect(() => {
     loadUserData();
     loadSystemStatus();
+    loadHistory();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -143,6 +204,7 @@ export function TopUpPage() {
           }),
         });
         loadUserData();
+        loadHistory();
       } else {
         codeForm.setError('root', { message: message || tr('redeem.failed', 'Redemption failed') });
       }
@@ -178,284 +240,375 @@ export function TopUpPage() {
   };
 
   // ─── Derived ───────────────────────────────────────────────────────
-  const balance = formatBalance(userQuota);
-  const accountNo = (userData?.id ?? user?.id ?? 0).toString().padStart(4, '0');
-  const todayLabel = useMemo(() => {
-    const d = new Date();
-    return d
-      .toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })
-      .toUpperCase();
-  }, []);
+  const balanceUSD = formatUSD(userQuota);
   const tokensLabel = `${userQuota.toLocaleString()} ${tr('tokens', 'tokens')}`;
-  const tipsList = (t('topup.tips.content', { returnObjects: true }) as unknown as string[]) || [];
+  const watchedAmount = stripeForm.watch('amount_usd');
+  const userEmail = (userData?.email as string | undefined) || (user as any)?.email || '';
+
+  const setPreset = (value: number) => {
+    stripeForm.setValue('amount_usd', value, { shouldValidate: true, shouldDirty: true });
+  };
+
+  const formatHistoryDate = (ts: number) =>
+    new Date(ts * 1000).toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+  const sourceLabel = (s: HistoryEntry['source']): string => {
+    switch (s) {
+      case 'stripe':
+        return tr('history.source.stripe', 'Card (Stripe)');
+      case 'code':
+        return tr('history.source.code', 'Redemption code');
+      case 'admin':
+        return tr('history.source.admin', 'Admin grant');
+      case 'system':
+        return tr('history.source.system', 'System bonus');
+      default:
+        return tr('history.source.other', 'Other');
+    }
+  };
 
   return (
-    <ResponsivePageContainer className="max-w-5xl">
-      <div className="ledger space-y-10 pb-8">
-        {/* ── Eyebrow heading ───────────────────────────────────────── */}
-        <header className="ledger-rise flex items-end justify-between gap-6">
-          <div>
-            <p className="ledger-eyebrow mb-3">{tr('hero.eyebrow', 'Apothecary · Ledger')}</p>
-            <h1 className="ledger-number text-4xl md:text-5xl text-foreground">
-              {tr('hero.title', 'Refill')}
-            </h1>
-          </div>
-          <p className="ledger-mono hidden md:block text-xs text-muted-foreground">{todayLabel}</p>
-        </header>
-
+    <ResponsivePageContainer
+      title={tr('title', 'Billing')}
+      description={tr('description', 'Manage your balance and add credits')}
+      className="max-w-4xl"
+    >
+      <div className="space-y-6">
         {/* ── Outcome banners ───────────────────────────────────────── */}
         {stripeOutcome === 'success' && (
-          <div className="ledger-rise ledger-delay-1 border-l-2 border-success pl-4 py-2 text-sm">
-            <span className="ledger-eyebrow text-success block mb-1">
-              {tr('stripe.outcome_success_eyebrow', 'Receipt filed')}
-            </span>
-            <span className="text-foreground">
-              {tr(
-                'stripe.outcome_success',
-                'Payment received. Your balance will update within a moment once Stripe confirms the charge.'
-              )}
-            </span>
-          </div>
-        )}
-        {stripeOutcome === 'cancel' && (
-          <div className="ledger-rise ledger-delay-1 border-l-2 border-warning pl-4 py-2 text-sm">
-            <span className="ledger-eyebrow text-warning block mb-1">
-              {tr('stripe.outcome_cancel_eyebrow', 'Filed away')}
-            </span>
-            <span className="text-foreground">
-              {tr('stripe.outcome_cancel', 'Payment was canceled. You have not been charged.')}
-            </span>
-          </div>
-        )}
-
-        {/* ── Hero balance card ─────────────────────────────────────── */}
-        <section className="ledger-rise ledger-delay-2 ledger-card ledger-paper p-6 md:p-10 overflow-hidden relative">
-          {/* Botanical sprig */}
-          <svg
-            className="ledger-sprig absolute -top-2 right-6 h-24 w-24 text-primary/25 hidden md:block"
-            viewBox="0 0 100 100"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M50 95 C50 70, 50 45, 50 12" />
-            <path d="M50 78 C40 74, 32 68, 30 58 C38 60, 46 66, 50 74" fill="currentColor" fillOpacity="0.15" />
-            <path d="M50 64 C60 60, 68 54, 70 44 C62 46, 54 52, 50 60" fill="currentColor" fillOpacity="0.15" />
-            <path d="M50 50 C40 46, 32 40, 30 30 C38 32, 46 38, 50 46" fill="currentColor" fillOpacity="0.15" />
-            <path d="M50 36 C60 32, 68 26, 70 16 C62 18, 54 24, 50 32" fill="currentColor" fillOpacity="0.15" />
-            <circle cx="50" cy="10" r="2" fill="currentColor" />
-          </svg>
-
-          <div className="flex items-baseline justify-between gap-4 mb-4">
-            <p className="ledger-eyebrow">
-              {tr('balance.eyebrow', 'Account')} · N° {accountNo}
-            </p>
-            <button
-              type="button"
-              onClick={loadUserData}
-              disabled={isRefreshing}
-              className="ledger-eyebrow inline-flex items-center gap-1.5 text-muted-foreground hover:text-foreground transition-colors"
-            >
-              <RotateCw className={`h-3 w-3 ${isRefreshing ? 'animate-spin' : ''}`} />
-              {tr('balance.refresh', 'Refresh')}
-            </button>
-          </div>
-
-          <hr className="ledger-rule mb-8" />
-
-          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6">
-            <div className="ledger-ink">
-              <div className="flex items-start gap-2">
-                <span className="ledger-number text-3xl md:text-4xl text-muted-foreground pt-3">$</span>
-                <span className="ledger-number text-7xl md:text-9xl text-foreground">{balance.dollars}</span>
-                <span className="ledger-number text-3xl md:text-4xl text-muted-foreground pt-3">
-                  .{balance.cents}
-                </span>
-              </div>
-              <p className="ledger-mono mt-4 text-xs text-muted-foreground">
-                {tokensLabel} · {tr('balance.unit', 'available for relay calls')}
+          <div className="flex items-start gap-3 rounded-lg border border-success-border bg-success-muted px-4 py-3 text-sm">
+            <CheckCircle2 className="h-4 w-4 mt-0.5 text-success flex-shrink-0" />
+            <div className="text-success-foreground">
+              <p className="font-medium mb-0.5">{tr('stripe.outcome_success_title', 'Payment received')}</p>
+              <p className="text-success-foreground/80">
+                {tr(
+                  'stripe.outcome_success',
+                  'Your balance will update within a moment once Stripe confirms the charge.'
+                )}
               </p>
             </div>
           </div>
-        </section>
-
-        {/* ── Refill grid: Stripe (primary, wide) + Code (slim) ─────── */}
-        <section className="grid grid-cols-1 lg:grid-cols-5 gap-8">
-          {/* Stripe — primary */}
-          <div className="ledger-rise ledger-delay-3 lg:col-span-3 ledger-card p-6 md:p-8 relative">
-            <div className="flex items-baseline justify-between mb-1">
-              <p className="ledger-eyebrow">{tr('stripe.section', 'Refill · Card')}</p>
-              <p className="ledger-eyebrow">USD</p>
+        )}
+        {stripeOutcome === 'cancel' && (
+          <div className="flex items-start gap-3 rounded-lg border border-warning-border bg-warning-muted px-4 py-3 text-sm">
+            <AlertCircle className="h-4 w-4 mt-0.5 text-warning flex-shrink-0" />
+            <div className="text-warning-foreground">
+              <p className="font-medium mb-0.5">{tr('stripe.outcome_cancel_title', 'Payment canceled')}</p>
+              <p className="text-warning-foreground/80">
+                {tr('stripe.outcome_cancel', 'You have not been charged.')}
+              </p>
             </div>
-            <h2 className="ledger-number text-2xl text-foreground mb-1">
-              {tr('stripe.title', 'Pay with Card')}
-            </h2>
-            <p className="text-sm text-muted-foreground mb-6">
-              {tr(
-                'stripe.description',
-                'Top up your balance using a credit or debit card. USD only, $20 minimum.'
-              )}
-            </p>
+          </div>
+        )}
 
-            <hr className="ledger-rule-double mb-6" />
+        {/* ── Top row: Balance + Add credits ───────────────────────── */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+          {/* Balance — left, narrow */}
+          <Card className="lg:col-span-2">
+            <CardContent className="p-6 h-full flex flex-col">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm text-muted-foreground">{tr('balance.title', 'Current balance')}</p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={loadUserData}
+                  disabled={isRefreshing}
+                  className="-mr-2 -mt-2 h-8 text-muted-foreground hover:text-foreground"
+                >
+                  <RefreshCw className={cn('h-4 w-4', isRefreshing && 'animate-spin')} />
+                </Button>
+              </div>
+              <p className="mt-1 text-4xl font-semibold tracking-tight tabular-nums text-foreground">
+                {balanceUSD}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground tabular-nums">{tokensLabel}</p>
+              <p className="mt-auto pt-6 text-xs text-muted-foreground">
+                {tr('balance.note', 'Credits are billed in USD and never expire.')}
+              </p>
+            </CardContent>
+          </Card>
 
+          {/* Add credits — right, wider */}
+          <Card className="lg:col-span-3">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <CreditCard className="h-4 w-4 text-muted-foreground" />
+                <CardTitle>{tr('stripe.title', 'Add credits')}</CardTitle>
+              </div>
+              <CardDescription>
+                {tr(
+                  'stripe.description',
+                  'Pay by card via Stripe. USD only, $20 minimum. A receipt is emailed to your registered address.'
+                )}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
             <Form {...stripeForm}>
-              <form onSubmit={stripeForm.handleSubmit(onStripeSubmit)} className="space-y-6">
+              <form onSubmit={stripeForm.handleSubmit(onStripeSubmit)} className="space-y-5">
+                {/* Preset chips */}
+                <div className="flex flex-wrap gap-2">
+                  {PRESET_AMOUNTS.map((amount) => {
+                    const active = Number(watchedAmount) === amount;
+                    return (
+                      <button
+                        type="button"
+                        key={amount}
+                        onClick={() => setPreset(amount)}
+                        className={cn(
+                          'inline-flex items-center justify-center rounded-md border px-3 py-1.5 text-sm font-medium tabular-nums transition-colors',
+                          active
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border bg-background text-foreground hover:bg-muted'
+                        )}
+                      >
+                        ${amount}
+                      </button>
+                    );
+                  })}
+                </div>
+
                 <FormField
                   control={stripeForm.control}
                   name="amount_usd"
                   render={({ field }) => (
                     <FormItem>
-                      <p className="ledger-eyebrow mb-3">{tr('stripe.label', 'Amount')}</p>
+                      <FormLabel>{tr('stripe.label', 'Amount (USD)')}</FormLabel>
                       <FormControl>
-                        <div className="flex items-baseline gap-3 border-b border-border pb-3 focus-within:border-primary transition-colors">
-                          <span className="ledger-number text-3xl md:text-4xl text-muted-foreground">$</span>
-                          <input
+                        <div className="relative">
+                          <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-sm text-muted-foreground">
+                            $
+                          </span>
+                          <Input
                             type="number"
                             inputMode="decimal"
-                            min={minTopUpUSD}
+                            min={MIN_TOPUP_USD}
                             step="1"
-                            placeholder={String(minTopUpUSD)}
-                            className="ledger-amount-input text-4xl md:text-5xl"
+                            placeholder={String(MIN_TOPUP_USD)}
+                            className="pl-7 tabular-nums"
                             {...field}
                           />
-                          <span className="ledger-mono text-xs text-muted-foreground pb-2">
-                            {tr('stripe.min_label', `min $${minTopUpUSD}`, { value: minTopUpUSD })}
-                          </span>
                         </div>
                       </FormControl>
-                      <FormMessage className="ledger-mono text-xs mt-3" />
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
 
                 {stripeForm.formState.errors.root && (
-                  <div className="ledger-mono text-xs text-destructive">
-                    {stripeForm.formState.errors.root.message}
-                  </div>
+                  <div className="text-sm text-destructive">{stripeForm.formState.errors.root.message}</div>
                 )}
 
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pt-2">
-                  <p className="ledger-mono text-[11px] leading-relaxed text-muted-foreground max-w-xs">
+                <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-between gap-3 pt-1">
+                  <p className="text-xs text-muted-foreground">
                     {tr(
                       'stripe.note',
                       'You will be redirected to Stripe Checkout. Your balance will update once payment is confirmed.'
                     )}
                   </p>
-                  <button type="submit" disabled={isStripeSubmitting} className="ledger-stamp self-start sm:self-auto">
+                  <Button type="submit" disabled={isStripeSubmitting} className="sm:w-auto">
                     {isStripeSubmitting
                       ? tr('stripe.processing', 'Redirecting…')
-                      : tr('stripe.button', 'Continue to Stripe →')}
-                  </button>
-                </div>
-              </form>
-            </Form>
-          </div>
-
-          {/* Redemption code — slim */}
-          <div className="ledger-rise ledger-delay-4 lg:col-span-2 ledger-card p-6 md:p-8 flex flex-col">
-            <div className="flex items-baseline justify-between mb-1">
-              <p className="ledger-eyebrow">{tr('redeem.section', 'Refill · Code')}</p>
-              <p className="ledger-eyebrow text-muted-foreground/60">N°02</p>
-            </div>
-            <h2 className="ledger-number text-2xl text-foreground mb-1">
-              {tr('redeem.title', 'Redeem Code')}
-            </h2>
-            <p className="text-sm text-muted-foreground mb-6">
-              {tr('redeem.description', 'Enter a redemption code to add quota')}
-            </p>
-
-            <hr className="ledger-rule mb-6" />
-
-            <Form {...codeForm}>
-              <form onSubmit={codeForm.handleSubmit(onCodeSubmit)} className="space-y-5 flex-1 flex flex-col">
-                <FormField
-                  control={codeForm.control}
-                  name="redemption_code"
-                  render={({ field }) => (
-                    <FormItem>
-                      <p className="ledger-eyebrow mb-2">{tr('redeem.label', 'Redemption Code')}</p>
-                      <FormControl>
-                        <input
-                          type="text"
-                          autoComplete="off"
-                          spellCheck={false}
-                          placeholder={tr('redeem.placeholder', 'Enter your redemption code')}
-                          className="ledger-input w-full text-base text-foreground placeholder:text-muted-foreground/60"
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormMessage className="ledger-mono text-xs mt-2" />
-                    </FormItem>
-                  )}
-                />
-
-                {codeForm.formState.errors.root && (
-                  <div
-                    className={`ledger-mono text-xs ${
-                      codeForm.formState.errors.root.type === 'success' ? 'text-success' : 'text-destructive'
-                    }`}
-                  >
-                    {codeForm.formState.errors.root.message}
-                  </div>
-                )}
-
-                <div className="mt-auto pt-4">
-                  <Button type="submit" variant="outline" className="w-full" disabled={isCodeSubmitting}>
-                    {isCodeSubmitting
-                      ? tr('redeem.processing', 'Redeeming...')
-                      : tr('redeem.button', 'Redeem Code')}
+                      : tr('stripe.button', 'Continue to Stripe')}
                   </Button>
                 </div>
               </form>
             </Form>
-          </div>
-        </section>
+          </CardContent>
+          </Card>
+        </div>
 
-        {/* ── External top-up & Tips footer ─────────────────────────── */}
-        <section className="ledger-rise ledger-delay-5 grid grid-cols-1 md:grid-cols-12 gap-8 pt-4">
-          {topUpLink && (
-            <div className="md:col-span-5">
-              <p className="ledger-eyebrow mb-3">{tr('online.eyebrow', 'Elsewhere')}</p>
-              <hr className="ledger-rule mb-4" />
-              <h3 className="ledger-number text-xl text-foreground mb-2">
-                {tr('online.title', 'Online Payment')}
-              </h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                {tr(
-                  'online.description',
-                  'Purchase quota through our external payment system'
-                )}
-              </p>
-              <button
-                type="button"
-                onClick={openTopUpLink}
-                className="ledger-mono text-xs inline-flex items-center gap-1.5 text-foreground hover:text-primary transition-colors group"
-              >
-                <span className="border-b border-current pb-0.5">
-                  {tr('online.button', 'Open Payment Portal')}
-                </span>
-                <ArrowUpRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-              </button>
+        {/* ── Redemption code — secondary, compact ─────────────────── */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Ticket className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-base">{tr('redeem.title', 'Redeem a code')}</CardTitle>
             </div>
-          )}
+            <CardDescription>
+              {tr('redeem.description', 'Have a redemption code? Add credits without paying.')}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Form {...codeForm}>
+              <form
+                onSubmit={codeForm.handleSubmit(onCodeSubmit)}
+                className="flex flex-col sm:flex-row sm:items-start gap-3"
+              >
+                <FormField
+                  control={codeForm.control}
+                  name="redemption_code"
+                  render={({ field }) => (
+                    <FormItem className="flex-1">
+                      <FormControl>
+                        <Input
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder={tr('redeem.placeholder', 'Enter your redemption code')}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <Button type="submit" variant="outline" disabled={isCodeSubmitting} className="sm:w-auto">
+                  {isCodeSubmitting
+                    ? tr('redeem.processing', 'Redeeming...')
+                    : tr('redeem.button', 'Redeem')}
+                </Button>
+              </form>
 
-          <div className={topUpLink ? 'md:col-span-7' : 'md:col-span-12'}>
-            <p className="ledger-eyebrow mb-3">{tr('tips.eyebrow', 'Marginalia')}</p>
-            <hr className="ledger-rule mb-4" />
-            <ol className="space-y-3 ledger-mono text-xs text-muted-foreground leading-relaxed">
-              {tipsList.map((tip, i) => (
-                <li key={i} className="flex gap-3">
-                  <span className="text-primary/70 tabular-nums">{String(i + 1).padStart(2, '0')}</span>
-                  <span className="font-sans text-sm text-foreground/80">{tip}</span>
-                </li>
-              ))}
-            </ol>
-          </div>
-        </section>
+              {codeForm.formState.errors.root && (
+                <div
+                  className={cn(
+                    'mt-3 text-sm',
+                    codeForm.formState.errors.root.type === 'success' ? 'text-success' : 'text-destructive'
+                  )}
+                >
+                  {codeForm.formState.errors.root.message}
+                </div>
+              )}
+            </Form>
+          </CardContent>
+        </Card>
+
+        {/* ── History (Stripe + redemption) ─────────────────────────── */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-muted-foreground" />
+                <CardTitle className="text-base">{tr('history.title', 'Recent activity')}</CardTitle>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={loadHistory}
+                disabled={isHistoryLoading}
+                className="h-8 text-muted-foreground hover:text-foreground"
+              >
+                <RefreshCw className={cn('h-4 w-4', isHistoryLoading && 'animate-spin')} />
+              </Button>
+            </div>
+            <CardDescription>
+              {tr('history.description', 'The last 10 top-ups and code redemptions on this account.')}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            {history.length === 0 && !isHistoryLoading ? (
+              <p className="px-6 pb-6 text-sm text-muted-foreground">
+                {tr('history.empty', 'No top-ups yet. Add credits or redeem a code to get started.')}
+              </p>
+            ) : (
+              <div className="border-t">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-xs uppercase tracking-wider text-muted-foreground">
+                      <th className="text-left font-medium px-6 py-2.5">{tr('history.col.date', 'Date')}</th>
+                      <th className="text-left font-medium px-6 py-2.5">{tr('history.col.source', 'Source')}</th>
+                      <th className="text-right font-medium px-6 py-2.5">{tr('history.col.amount', 'Amount')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {history.map((entry) => (
+                      <tr key={entry.id} className="border-t hover:bg-muted/30">
+                        <td className="px-6 py-3 tabular-nums text-foreground/90 whitespace-nowrap">
+                          {formatHistoryDate(entry.created_at)}
+                        </td>
+                        <td className="px-6 py-3 text-foreground/80">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={cn(
+                                'inline-block h-1.5 w-1.5 rounded-full',
+                                entry.source === 'stripe' && 'bg-primary',
+                                entry.source === 'code' && 'bg-accent',
+                                entry.source === 'admin' && 'bg-warning',
+                                entry.source === 'system' && 'bg-info',
+                                entry.source === 'other' && 'bg-muted-foreground/40'
+                              )}
+                            />
+                            <span>{sourceLabel(entry.source)}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-3 text-right tabular-nums text-foreground font-medium">
+                          {formatUSD(entry.quota)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ── External top-up (only if configured) ─────────────────── */}
+        {topUpLink && (
+          <Card>
+            <CardContent className="flex items-center justify-between gap-4 p-4">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground">
+                  {tr('online.title', 'Online payment portal')}
+                </p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {tr('online.description', 'Purchase quota through our external payment system')}
+                </p>
+              </div>
+              <Button variant="ghost" size="sm" onClick={openTopUpLink} className="flex-shrink-0">
+                {tr('online.button', 'Open')}
+                <ArrowUpRight className="h-4 w-4 ml-1" />
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* ── Notes footer (business-aligned) ──────────────────────── */}
+        <div className="pt-2">
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-3">
+            {tr('notes.title', 'Good to know')}
+          </p>
+          <ul className="space-y-2 text-sm text-muted-foreground">
+            <li className="flex items-start gap-2">
+              <Mail className="h-4 w-4 mt-0.5 text-muted-foreground/70 flex-shrink-0" />
+              <span>
+                {userEmail
+                  ? tr(
+                      'notes.receipt_with_email',
+                      'After each card payment, Stripe emails an itemized receipt to {{email}}.',
+                      { email: userEmail }
+                    )
+                  : tr(
+                      'notes.receipt_no_email',
+                      'After each card payment, Stripe emails a receipt. Add an email to your account to receive it automatically.'
+                    )}
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-muted-foreground/50 select-none mt-1">•</span>
+              <span>
+                {tr(
+                  'notes.expiry',
+                  'Credits never expire. Card payments are USD only with a $20 minimum; redemption codes have no minimum.'
+                )}
+              </span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="text-muted-foreground/50 select-none mt-1">•</span>
+              <span>
+                {tr(
+                  'notes.refund',
+                  'Refund requests are handled case-by-case. Contact support with the receipt from Stripe.'
+                )}
+              </span>
+            </li>
+          </ul>
+        </div>
       </div>
     </ResponsivePageContainer>
   );

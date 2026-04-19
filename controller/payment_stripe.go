@@ -79,6 +79,11 @@ func CreateStripeCheckout(c *gin.Context) {
 		base = scheme + "://" + c.Request.Host
 	}
 
+	// Look up the user's registered email so Stripe sends the receipt there.
+	// Failure is non-fatal — the customer can still enter an email at Checkout.
+	userEmail, _ := model.GetUserEmail(userID)
+	userEmail = strings.TrimSpace(userEmail)
+
 	stripe.Key = config.StripeSecretKey
 	params := &stripe.CheckoutSessionParams{
 		Mode:              stripe.String(string(stripe.CheckoutSessionModePayment)),
@@ -101,6 +106,16 @@ func CreateStripeCheckout(c *gin.Context) {
 			"user_id": strconv.Itoa(userID),
 			"quota":   strconv.FormatInt(quota, 10),
 		},
+	}
+	if userEmail != "" {
+		// Pre-fill the Checkout email field.
+		params.CustomerEmail = stripe.String(userEmail)
+		// Force Stripe to email a receipt to the user's registered address even
+		// when the dashboard "email customers about successful payments" toggle
+		// is off. Honored in live mode per Stripe docs.
+		params.PaymentIntentData = &stripe.CheckoutSessionPaymentIntentDataParams{
+			ReceiptEmail: stripe.String(userEmail),
+		}
 	}
 
 	session, err := checkoutsession.New(params)
