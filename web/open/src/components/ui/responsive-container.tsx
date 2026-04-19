@@ -74,8 +74,13 @@ export function ResponsivePageContainer({ children, className, title, descriptio
 
           <div className={cn('flex items-start justify-between gap-4', isMobile ? 'flex-col' : 'flex-row items-center')}>
             <div className="space-y-1">
-              {title && <h1 className={cn('font-bold tracking-tight', isMobile ? 'text-xl' : 'text-2xl md:text-3xl')}>{title}</h1>}
-              {description && <p className={cn('text-muted-foreground', isMobile ? 'text-xs' : 'text-sm')}>{description}</p>}
+              {title && (
+                <div className="flex items-center gap-2">
+                  <span aria-hidden="true" className="h-1.5 w-1.5 rounded-[1px] bg-[hsl(var(--accent))]" />
+                  <h1 className={cn('font-semibold tracking-[-0.035em]', isMobile ? 'text-xl' : 'text-2xl md:text-[1.875rem]')}>{title}</h1>
+                </div>
+              )}
+              {description && <p className={cn('text-muted-foreground max-w-2xl leading-relaxed', isMobile ? 'text-xs' : 'text-sm')}>{description}</p>}
             </div>
 
             {actions && (

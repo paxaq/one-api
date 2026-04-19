@@ -7,26 +7,26 @@
 
 @layer base {
   :root {
-    /* Open — neutral paper, near-black ink, electric lime accent (OpenRouter-inspired) */
-    --background: 0 0% 99%;
-    --foreground: 0 0% 8%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 8%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 8%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96%;
-    --secondary-foreground: 0 0% 12%;
-    --muted: 0 0% 95%;
-    --muted-foreground: 0 0% 42%;
-    --accent: 76 78% 48%;
-    --accent-foreground: 0 0% 8%;
-    --destructive: 0 72% 48%;
+    /* Open — warm paper, ink black, citron accent (OpenRouter × OpenAI editorial) */
+    --background: 48 16% 97%;
+    --foreground: 60 6% 9%;
+    --card: 48 20% 99%;
+    --card-foreground: 60 6% 9%;
+    --popover: 48 20% 99%;
+    --popover-foreground: 60 6% 9%;
+    --primary: 60 6% 10%;
+    --primary-foreground: 48 20% 98%;
+    --secondary: 48 12% 93%;
+    --secondary-foreground: 60 6% 14%;
+    --muted: 48 10% 92%;
+    --muted-foreground: 50 4% 38%;
+    --accent: 70 75% 46%;
+    --accent-foreground: 60 8% 8%;
+    --destructive: 12 70% 46%;
     --destructive-foreground: 0 0% 100%;
-    --border: 0 0% 90%;
-    --input: 0 0% 90%;
-    --ring: 76 78% 48%;
+    --border: 48 8% 86%;
+    --input: 48 8% 86%;
+    --ring: 70 75% 46%;
     /* Chart: vivid, well-separated across the color wheel */
     --chart-1: 172 65% 38%;
     --chart-2: 24 80% 52%;
@@ -63,26 +63,26 @@
   }
 
   .dark {
-    /* Open — near-black canvas, off-white ink, electric lime accent */
-    --background: 0 0% 4%;
-    --foreground: 0 0% 96%;
-    --card: 0 0% 6%;
-    --card-foreground: 0 0% 96%;
-    --popover: 0 0% 6%;
-    --popover-foreground: 0 0% 96%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 8%;
-    --secondary: 0 0% 12%;
-    --secondary-foreground: 0 0% 96%;
-    --muted: 0 0% 11%;
-    --muted-foreground: 0 0% 62%;
-    --accent: 76 80% 56%;
-    --accent-foreground: 0 0% 6%;
-    --destructive: 0 62% 50%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 0 0% 16%;
-    --input: 0 0% 16%;
-    --ring: 76 80% 56%;
+    /* Open — warm-tinted obsidian, parchment ink, citron accent */
+    --background: 60 5% 5%;
+    --foreground: 48 14% 94%;
+    --card: 60 5% 7%;
+    --card-foreground: 48 14% 94%;
+    --popover: 60 5% 7%;
+    --popover-foreground: 48 14% 94%;
+    --primary: 48 14% 96%;
+    --primary-foreground: 60 6% 8%;
+    --secondary: 60 4% 12%;
+    --secondary-foreground: 48 14% 94%;
+    --muted: 60 4% 11%;
+    --muted-foreground: 48 6% 60%;
+    --accent: 70 80% 58%;
+    --accent-foreground: 60 8% 6%;
+    --destructive: 12 65% 50%;
+    --destructive-foreground: 48 14% 96%;
+    --border: 60 4% 16%;
+    --input: 60 4% 16%;
+    --ring: 70 80% 58%;
     /* Chart: boosted lightness for dark backgrounds */
     --chart-1: 172 60% 50%;
     --chart-2: 24 75% 58%;
@@ -139,10 +139,16 @@
     /* Do not force overflow-x hidden globally; allow tables and toolbars to scroll when needed */
 
     text-autospace: normal;
-    font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    font-feature-settings: 'ss01', 'ss02', 'ss03', 'cv11';
+    font-variant-numeric: tabular-nums;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+
+    /* Hairline dot grid — barely-there atmosphere, OpenRouter-style */
+    background-image: radial-gradient(circle, hsl(var(--border) / 0.55) 1px, transparent 1px);
+    background-size: 22px 22px;
+    background-attachment: fixed;
   }
 
   code,
@@ -150,8 +156,8 @@
   pre,
   samp,
   .font-mono {
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-    font-feature-settings: 'calt', 'liga' 0;
+    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-feature-settings: 'zero', 'ss02';
   }
 
   h1,
@@ -160,8 +166,54 @@
   h4,
   h5,
   h6 {
-    letter-spacing: -0.02em;
+    letter-spacing: -0.025em;
     font-weight: 600;
+  }
+
+  h1 {
+    letter-spacing: -0.035em;
+    font-weight: 700;
+  }
+
+  /* Selection adopts the citron accent */
+  ::selection {
+    background: hsl(var(--accent) / 0.35);
+    color: hsl(var(--foreground));
+  }
+
+  /* Custom scrollbar — slim, neutral, lifts on hover */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 6px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground) / 0.5);
+    background-clip: padding-box;
+    border: 2px solid transparent;
+  }
+
+  /* Refined focus ring */
+  :focus-visible {
+    outline: 2px solid hsl(var(--accent));
+    outline-offset: 2px;
+    border-radius: 2px;
   }
 
   input,
@@ -313,3 +365,125 @@
     transform: scaleX(0);
   }
 }
+
+/* ──────────────────────────────────────────────────────────────────────── */
+/* Open theme — signature utilities (OpenRouter × OpenAI editorial accents) */
+/* ──────────────────────────────────────────────────────────────────────── */
+
+@layer components {
+  /* Eyebrow label — small caps, monospace, wide tracking. Use above section titles. */
+  .eyebrow {
+    font-family: 'IBM Plex Mono', ui-monospace, monospace;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+  }
+
+  /* Display heading — italic serif accent for marketing-style numerics */
+  .display-serif {
+    font-family: 'IBM Plex Serif', ui-serif, Georgia, serif;
+    font-style: italic;
+    font-weight: 400;
+    letter-spacing: -0.02em;
+  }
+
+  /* Hairline divider — 1px line with a subtle gradient fade at the edges */
+  .hairline {
+    height: 1px;
+    background: linear-gradient(
+      to right,
+      transparent,
+      hsl(var(--border)) 12%,
+      hsl(var(--border)) 88%,
+      transparent
+    );
+  }
+
+  /* Citron underline — adds a thick lime mark beneath inline text */
+  .accent-mark {
+    background-image: linear-gradient(transparent 65%, hsl(var(--accent) / 0.45) 65%);
+    padding: 0 0.1em;
+  }
+
+  /* Crisp data card — sharper corners, gradient tint, hairline borders */
+  .card-crisp {
+    @apply rounded-md border;
+    background: linear-gradient(
+      180deg,
+      hsl(var(--card)) 0%,
+      hsl(var(--card) / 0.6) 100%
+    );
+    box-shadow: 0 1px 0 0 hsl(var(--border) / 0.5);
+  }
+
+  /* Numeric block — large tabular figure for stat displays */
+  .stat-figure {
+    font-family: 'IBM Plex Sans', sans-serif;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.04em;
+    line-height: 1;
+  }
+
+  /* Pill tag — OpenRouter-style metadata chip */
+  .tag-pill {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    background: hsl(var(--muted) / 0.5);
+    color: hsl(var(--muted-foreground));
+  }
+
+  .tag-pill-accent {
+    background: hsl(var(--accent) / 0.12);
+    border-color: hsl(var(--accent) / 0.4);
+    color: hsl(var(--accent-foreground));
+  }
+
+  .dark .tag-pill-accent {
+    color: hsl(var(--accent));
+  }
+
+  /* Refined data-table override — hairline rows, mono numerics */
+  .data-table th {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: hsl(var(--muted-foreground));
+    background: transparent;
+    border-bottom: 1px solid hsl(var(--border));
+  }
+
+  .data-table td {
+    border-bottom: 1px solid hsl(var(--border) / 0.6);
+  }
+
+  .data-table tbody tr:hover {
+    background: hsl(var(--accent) / 0.05);
+  }
+}
+
+/* Subtle entrance — stagger via animation-delay on children */
+@keyframes open-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-up {
+  animation: open-fade-up 420ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+.fade-up-1 { animation-delay: 60ms; }
+.fade-up-2 { animation-delay: 120ms; }
+.fade-up-3 { animation-delay: 180ms; }
+.fade-up-4 { animation-delay: 240ms; }

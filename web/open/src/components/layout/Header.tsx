@@ -126,10 +126,20 @@ export function Header() {
       <header className="border-b bg-background/95 backdrop-blur-sm sticky top-0 z-50 w-full max-w-full">
         <div className="mx-auto px-3 sm:px-4 w-full max-w-full">
           <div className="flex items-center justify-between h-16 gap-4">
-            {/* Logo and Brand */}
+            {/* Logo and Brand — citron mark + tightened wordmark */}
             <div className="flex items-center flex-shrink-0">
-              <Link to="/" className="text-xl font-bold hover:text-primary transition-colors truncate max-w-[55vw] sm:max-w-none mr-4">
-                {systemStatus.system_name || 'OneAPI'}
+              <Link
+                to="/"
+                className="group flex items-center gap-2 hover:opacity-90 transition-opacity truncate max-w-[55vw] sm:max-w-none mr-4"
+                aria-label="Home"
+              >
+                <span
+                  aria-hidden="true"
+                  className="inline-block h-3 w-3 rounded-[2px] bg-[hsl(var(--accent))] shadow-[0_0_0_3px_hsl(var(--accent)/0.18)] transition-transform duration-300 group-hover:rotate-45"
+                />
+                <span className="text-[1.05rem] font-semibold tracking-[-0.03em] truncate">
+                  {systemStatus.system_name || 'OneAPI'}
+                </span>
               </Link>
             </div>
 
@@ -155,9 +165,9 @@ export function Header() {
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-56">
-                        <DropdownMenuLabel className="flex flex-col">
-                          <span className="text-xs text-muted-foreground">{t('header.signed_in_as')}</span>
-                          <span className="font-medium truncate">{user.username}</span>
+                        <DropdownMenuLabel className="flex flex-col gap-0.5">
+                          <span className="eyebrow">{t('header.signed_in_as')}</span>
+                          <span className="font-medium truncate tracking-tight">{user.username}</span>
                         </DropdownMenuLabel>
                         <DropdownMenuSeparator />
                         <DropdownMenuItem onSelect={() => navigate('/settings')} className="flex items-center gap-2">

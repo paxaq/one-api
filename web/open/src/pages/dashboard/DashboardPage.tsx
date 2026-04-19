@@ -111,10 +111,11 @@ export function DashboardPage() {
         </div>
       )}
 
-      <div className="mb-6">
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-6">
-          <div>
-            <h2 className="text-xl font-semibold">{t('dashboard.overview.title')}</h2>
+      <div className="mb-6 fade-up">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between mb-6">
+          <div className="flex flex-col gap-1">
+            <span className="eyebrow">§ Overview</span>
+            <h2 className="text-2xl font-semibold tracking-[-0.03em]">{t('dashboard.overview.title')}</h2>
             <p className="text-sm text-muted-foreground">{t('dashboard.overview.subtitle')}</p>
           </div>
           {lastUpdated && (
