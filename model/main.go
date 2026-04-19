@@ -324,6 +324,9 @@ func migrateDB() error {
 	if err = DB.AutoMigrate(&PasskeyCredential{}); err != nil {
 		return errors.Wrapf(err, "failed to migrate PasskeyCredential")
 	}
+	if err = DB.AutoMigrate(&PaymentOrder{}); err != nil {
+		return errors.Wrapf(err, "failed to migrate PaymentOrder")
+	}
 	return nil
 }
 

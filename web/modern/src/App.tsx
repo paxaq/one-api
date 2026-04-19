@@ -121,6 +121,8 @@ function App() {
                     <Route path="about" element={<AboutPage />} />
                     <Route path="settings" element={<SettingsPage />} />
                     <Route path="topup" element={<TopUpPage />} />
+                    <Route path="topup/success" element={<TopUpPage />} />
+                    <Route path="topup/cancel" element={<TopUpPage />} />
                     <Route path="chat" element={<PlaygroundPage />} />
                     <Route path="realtime" element={<RealtimePlaygroundPage />} />
                   </Route>

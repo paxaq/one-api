@@ -37,6 +37,7 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/oauth/wechat/bind", middleware.CriticalRateLimit(), middleware.UserAuth(), auth.WeChatBind)
 		apiRouter.GET("/oauth/email/bind", middleware.CriticalRateLimit(), middleware.UserAuth(), controller.EmailBind)
 		apiRouter.POST("/topup", middleware.AdminAuth(), controller.AdminTopUp)
+		apiRouter.POST("/payment/stripe/webhook", controller.StripeWebhook)
 
 		userRoute := apiRouter.Group("/user")
 		{
@@ -57,6 +58,7 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.GET("/token", controller.GenerateAccessToken)
 				selfRoute.GET("/aff", controller.GetAffCode)
 				selfRoute.POST("/topup", controller.TopUp)
+				selfRoute.POST("/topup/stripe", controller.CreateStripeCheckout)
 				selfRoute.GET("/available_models", controller.GetUserAvailableModels)
 				selfRoute.GET("/totp/status", controller.GetTotpStatus)
 				selfRoute.GET("/totp/setup", controller.SetupTotp)

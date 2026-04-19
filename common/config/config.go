@@ -1349,6 +1349,21 @@ var (
 )
 
 // =============================================================================
+// STRIPE PAYMENT CONFIGURATION
+// =============================================================================
+
+var (
+	// StripeSecretKey is the Stripe API secret key (sk_live_... or sk_test_...).
+	StripeSecretKey = env.String("STRIPE_SECRET_KEY", "")
+
+	// StripeWebhookSecret verifies incoming Stripe webhook signatures (whsec_...).
+	StripeWebhookSecret = env.String("STRIPE_WEBHOOK_SECRET", "")
+
+	// MinTopUpUSD is the minimum freeform USD top-up amount accepted via Stripe.
+	MinTopUpUSD = env.Int("MIN_TOPUP_USD", 20)
+)
+
+// =============================================================================
 // GITHUB OAUTH CONFIGURATION
 // =============================================================================
 // Settings for GitHub OAuth login integration.

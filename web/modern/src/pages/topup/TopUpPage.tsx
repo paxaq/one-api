@@ -6,13 +6,20 @@ import { ResponsivePageContainer } from '@/components/ui/responsive-container';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/lib/stores/auth';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
+import { useLocation } from 'react-router-dom';
 import * as z from 'zod';
 
 export function TopUpPage() {
   const { user, updateUser } = useAuthStore();
+  const location = useLocation();
+  const stripeOutcome = useMemo<'success' | 'cancel' | null>(() => {
+    if (location.pathname.endsWith('/topup/success')) return 'success';
+    if (location.pathname.endsWith('/topup/cancel')) return 'cancel';
+    return null;
+  }, [location.pathname]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [userQuota, setUserQuota] = useState(user?.quota || 0);
   const [topUpLink, setTopUpLink] = useState('');
@@ -33,6 +40,41 @@ export function TopUpPage() {
     resolver: zodResolver(topupSchema),
     defaultValues: { redemption_code: '' },
   });
+
+  const minTopUpUSD = 20;
+  const stripeSchema = z.object({
+    amount_usd: z.coerce
+      .number({ invalid_type_error: tr('stripe.required', 'Enter an amount in USD') })
+      .min(minTopUpUSD, tr('stripe.min', `Minimum is $${minTopUpUSD}`, { value: minTopUpUSD }))
+      .max(100000, tr('stripe.max', 'Amount too large')),
+  });
+  type StripeForm = z.infer<typeof stripeSchema>;
+  const stripeForm = useForm<StripeForm>({
+    resolver: zodResolver(stripeSchema),
+    defaultValues: { amount_usd: minTopUpUSD },
+  });
+  const [isStripeSubmitting, setIsStripeSubmitting] = useState(false);
+
+  const onStripeSubmit = async (data: StripeForm) => {
+    setIsStripeSubmitting(true);
+    try {
+      const res = await api.post('/api/user/topup/stripe', { amount_usd: data.amount_usd });
+      const { success, message, data: payload } = res.data;
+      if (success && payload?.url) {
+        window.location.href = payload.url;
+        return;
+      }
+      stripeForm.setError('root', {
+        message: message || tr('stripe.failed', 'Failed to create checkout session'),
+      });
+    } catch (error) {
+      stripeForm.setError('root', {
+        message: error instanceof Error ? error.message : tr('stripe.failed', 'Failed to create checkout session'),
+      });
+    } finally {
+      setIsStripeSubmitting(false);
+    }
+  };
 
   // Helper function to render quota with USD conversion
   const renderQuotaWithPrompt = (quota: number): string => {
@@ -146,6 +188,19 @@ export function TopUpPage() {
       className="max-w-4xl"
     >
       <div className="space-y-6">
+        {stripeOutcome === 'success' && (
+          <div className="rounded-md border border-success-border bg-success-muted px-4 py-3 text-sm text-success-foreground">
+            {tr(
+              'stripe.outcome_success',
+              'Payment received. Your balance will update within a moment once Stripe confirms the charge.'
+            )}
+          </div>
+        )}
+        {stripeOutcome === 'cancel' && (
+          <div className="rounded-md border border-warning-border bg-warning-muted px-4 py-3 text-sm text-warning-foreground">
+            {tr('stripe.outcome_cancel', 'Payment was canceled. You have not been charged.')}
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {/* Current Balance */}
           <Card>
@@ -201,6 +256,55 @@ export function TopUpPage() {
             </CardContent>
           </Card>
         </div>
+
+        {/* Stripe Top-up */}
+        <Card>
+          <CardHeader>
+            <CardTitle>{tr('stripe.title', 'Pay with Card (Stripe)')}</CardTitle>
+            <CardDescription>
+              {tr('stripe.description', 'Top up your balance using a credit or debit card. USD only, $20 minimum.')}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Form {...stripeForm}>
+              <form onSubmit={stripeForm.handleSubmit(onStripeSubmit)} className="space-y-4">
+                <FormField
+                  control={stripeForm.control}
+                  name="amount_usd"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{tr('stripe.label', 'Amount (USD)')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          min={minTopUpUSD}
+                          step="1"
+                          placeholder={String(minTopUpUSD)}
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+
+                {stripeForm.formState.errors.root && (
+                  <div className="text-sm text-destructive">{stripeForm.formState.errors.root.message}</div>
+                )}
+
+                <Button type="submit" className="w-full" disabled={isStripeSubmitting}>
+                  {isStripeSubmitting
+                    ? tr('stripe.processing', 'Redirecting…')
+                    : tr('stripe.button', 'Continue to Stripe')}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  {tr('stripe.note', 'You will be redirected to Stripe Checkout. Your balance will update once payment is confirmed.')}
+                </p>
+              </form>
+            </Form>
+          </CardContent>
+        </Card>
 
         {/* External Top-up */}
         {topUpLink && (
