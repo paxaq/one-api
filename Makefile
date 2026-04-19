@@ -21,7 +21,7 @@ lint:
 	govulncheck ./...
 
 # Development targets - Template specific
-.PHONY: dev-air dev-berry dev-modern
+.PHONY: dev-air dev-berry dev-modern dev-open
 dev-air:
 	@./web/air/dev.sh dev
 
@@ -31,12 +31,15 @@ dev-berry:
 dev-modern:
 	@cd web/modern && npm run dev
 
+dev-open:
+	@cd web/open && yarn && yarn dev
+
 # Default dev target
 .PHONY: dev
 dev: dev-modern
 
 # Build targets - Template specific
-.PHONY: build-frontend-air build-frontend-berry build-frontend-modern
+.PHONY: build-frontend-air build-frontend-berry build-frontend-modern build-frontend-open
 build-frontend-air:
 	@./web/air/dev.sh build
 
@@ -46,12 +49,15 @@ build-frontend-berry:
 build-frontend-modern:
 	@cd web/modern && yarn && yarn build
 
+build-frontend-open:
+	@cd web/open && yarn && yarn build
+
 # Default build target
 .PHONY: build-frontend
 build-frontend: build-frontend-modern
 
 # Build development versions - Template specific
-.PHONY: build-frontend-dev-air build-frontend-dev-berry build-frontend-dev-modern
+.PHONY: build-frontend-dev-air build-frontend-dev-berry build-frontend-dev-modern build-frontend-dev-open
 build-frontend-dev-air:
 	@./web/air/dev.sh build-dev
 
@@ -61,13 +67,16 @@ build-frontend-dev-berry:
 build-frontend-dev-modern:
 	@cd web/modern && npm run build
 
+build-frontend-dev-open:
+	@cd web/open && yarn && yarn build
+
 # Default dev build target
 .PHONY: build-frontend-dev
 build-frontend-dev: build-frontend-dev-modern
 
 # Build all templates
 .PHONY: build-all-templates
-build-all-templates: build-frontend-air build-frontend-berry build-frontend-modern
+build-all-templates: build-frontend-air build-frontend-berry build-frontend-modern build-frontend-open
 
 # Help target
 .PHONY: help-dev
@@ -76,15 +85,18 @@ help-dev:
 	@echo "  dev-air           Start air template development server (port 3002)"
 	@echo "  dev-berry         Start berry template development server (port 3003)"
 	@echo "  dev-modern        Start modern template development server (port 3001)"
+	@echo "  dev-open          Start open template development server (port 3004)"
 	@echo "  dev               Start modern template development server (default)"
 	@echo ""
 	@echo "Build targets:"
 	@echo "  build-frontend-air         Build air template for production"
 	@echo "  build-frontend-berry       Build berry template for production"
 	@echo "  build-frontend-modern      Build modern template for production"
+	@echo "  build-frontend-open        Build open template for production"
 	@echo "  build-all-templates        Build all templates for production"
 	@echo ""
 	@echo "Development build targets:"
 	@echo "  build-frontend-dev-air     Build air template for development"
 	@echo "  build-frontend-dev-berry   Build berry template for development"
 	@echo "  build-frontend-dev-modern  Build modern template for development"
+	@echo "  build-frontend-dev-open    Build open template for development"

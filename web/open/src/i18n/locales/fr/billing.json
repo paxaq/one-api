@@ -1,0 +1,40 @@
+{
+  "topup": {
+    "balance": {
+      "available": "Quota disponible pour l'utilisation de l'API",
+      "description": "Votre solde de quota actuel",
+      "refresh": "Actualiser le solde",
+      "title": "Solde actuel"
+    },
+    "description": "Gérez le solde de votre compte et utilisez des codes",
+    "online": {
+      "button": "Ouvrir le portail de paiement",
+      "description": "Achetez du quota via notre système de paiement externe",
+      "note": "Vous serez redirigé vers un système de paiement externe. Vos informations de compte seront automatiquement incluses.",
+      "text": "Cliquez sur le bouton ci-dessous pour ouvrir notre portail de paiement sécurisé où vous pouvez acheter du quota supplémentaire pour votre compte.",
+      "title": "Paiement en ligne"
+    },
+    "redeem": {
+      "button": "Utiliser le code",
+      "description": "Entrez un code de remboursement pour ajouter du quota",
+      "failed": "L'utilisation a échoué",
+      "label": "Code de remboursement",
+      "placeholder": "Entrez votre code de remboursement",
+      "processing": "Utilisation...",
+      "required": "Le code de remboursement est requis",
+      "success": "Utilisé avec succès ! Ajout de {{value}} jetons.",
+      "title": "Utiliser un code"
+    },
+    "tips": {
+      "content": [
+        "Le quota est consommé en fonction de votre utilisation de l'API et des coûts des modèles",
+        "Différents modèles ont des tarifs différents",
+        "Consultez la page Modèles pour voir les tarifs de chaque modèle",
+        "Les codes de remboursement sont sensibles à la casse",
+        "Votre solde sera automatiquement mis à jour après une utilisation réussie"
+      ],
+      "title": "Conseils"
+    },
+    "title": "Recharger"
+  }
+}

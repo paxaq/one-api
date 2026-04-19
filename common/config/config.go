@@ -981,7 +981,7 @@ var (
 	//
 	// Environment variable: THEME
 	// Default: "modern"
-	// Allowed values: "berry", "air", "modern"
+	// Allowed values: "berry", "air", "modern", "open"
 	// Note: "default" is no longer supported and will be automatically
 	// redirected to "modern" for backward compatibility.
 	Theme = env.String("THEME", "modern")
@@ -992,6 +992,7 @@ var (
 		"berry":  true,
 		"air":    true,
 		"modern": true,
+		"open":   true,
 	}
 )
 

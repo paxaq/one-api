@@ -1,0 +1,40 @@
+{
+  "topup": {
+    "balance": {
+      "available": "Cuota disponible para uso de API",
+      "description": "Tu saldo de cuota actual",
+      "refresh": "Actualizar saldo",
+      "title": "Saldo actual"
+    },
+    "description": "Gestiona el saldo de tu cuenta y canjea códigos",
+    "online": {
+      "button": "Abrir portal de pago",
+      "description": "Compra cuota a través de nuestro sistema de pago externo",
+      "note": "Serás redirigido a un sistema de pago externo. La información de tu cuenta se incluirá automáticamente.",
+      "text": "Haz clic en el botón de abajo para abrir nuestro portal de pago seguro donde puedes comprar cuota adicional para tu cuenta.",
+      "title": "Pago en línea"
+    },
+    "redeem": {
+      "button": "Canjear código",
+      "description": "Introduce un código de canje para agregar cuota",
+      "failed": "Canje fallido",
+      "label": "Código de canje",
+      "placeholder": "Introduce tu código de canje",
+      "processing": "Canjeando...",
+      "required": "El código de canje es obligatorio",
+      "success": "¡Canjeado exitosamente! Se agregaron {{value}} tokens.",
+      "title": "Canjear código"
+    },
+    "tips": {
+      "content": [
+        "La cuota se consume según el uso de tu API y los costos del modelo",
+        "Diferentes modelos tienen diferentes tarifas de precios",
+        "Consulta la página de Modelos para ver los precios de cada modelo",
+        "Los códigos de canje distinguen entre mayúsculas y minúsculas",
+        "Tu saldo se actualizará automáticamente después de un canje exitoso"
+      ],
+      "title": "Consejos"
+    },
+    "title": "Recargar"
+  }
+}

@@ -98,6 +98,7 @@ func TestValidateTheme(t *testing.T) {
 		{"berry is valid", "berry", false},
 		{"air is valid", "air", false},
 		{"modern is valid", "modern", false},
+		{"open is valid", "open", false},
 		{"invalid theme", "dark", true},
 		{"empty is invalid", "", true},
 	}

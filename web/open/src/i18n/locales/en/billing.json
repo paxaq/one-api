@@ -1,0 +1,40 @@
+{
+  "topup": {
+    "balance": {
+      "available": "Available quota for API usage",
+      "description": "Your current quota balance",
+      "refresh": "Refresh Balance",
+      "title": "Current Balance"
+    },
+    "description": "Manage your account balance and redeem codes",
+    "online": {
+      "button": "Open Payment Portal",
+      "description": "Purchase quota through our external payment system",
+      "note": "You will be redirected to an external payment system. Your account information will be automatically included.",
+      "text": "Click the button below to open our secure payment portal where you can purchase additional quota for your account.",
+      "title": "Online Payment"
+    },
+    "redeem": {
+      "button": "Redeem Code",
+      "description": "Enter a redemption code to add quota",
+      "failed": "Redemption failed",
+      "label": "Redemption Code",
+      "placeholder": "Enter your redemption code",
+      "processing": "Redeeming...",
+      "required": "Redemption code is required",
+      "success": "Successfully redeemed! Added {{value}} tokens.",
+      "title": "Redeem Code"
+    },
+    "tips": {
+      "content": [
+        "Quota is consumed based on your API usage and model costs",
+        "Different models have different pricing rates",
+        "Check the Models page to see pricing for each model",
+        "Redemption codes are case-sensitive",
+        "Your balance will be automatically updated after successful redemption"
+      ],
+      "title": "Tips"
+    },
+    "title": "Top Up"
+  }
+}
