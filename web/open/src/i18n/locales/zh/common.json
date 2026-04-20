@@ -40,6 +40,7 @@
     "models": "模型",
     "no_items": "暂无内容",
     "or": "或",
+    "saving": "正在保存…",
     "pagination": {
       "first_page": "首页",
       "last_page": "末页",

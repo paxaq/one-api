@@ -7,7 +7,7 @@ import { useSystemStatus } from '@/hooks/useSystemStatus';
 import { api } from '@/lib/api';
 import { buildGitHubOAuthUrl, getOAuthState } from '@/lib/oauth';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
@@ -35,6 +35,32 @@ export function RegisterPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isEmailSent, setIsEmailSent] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState<string>('');
+  const RESEND_COOLDOWN_SECONDS = 60;
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
+    };
+  }, []);
+
+  const startResendCooldown = () => {
+    setResendCooldown(RESEND_COOLDOWN_SECONDS);
+    if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
+    cooldownTimerRef.current = setInterval(() => {
+      setResendCooldown((s) => {
+        if (s <= 1) {
+          if (cooldownTimerRef.current) {
+            clearInterval(cooldownTimerRef.current);
+            cooldownTimerRef.current = null;
+          }
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+  };
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { systemStatus } = useSystemStatus();
@@ -90,6 +116,7 @@ export function RegisterPage() {
       if (success) {
         setIsEmailSent(true);
         form.clearErrors('email');
+        startResendCooldown();
         // Reset token after successful verification send to encourage a fresh check next action
         if (systemStatus?.turnstile_check) setTurnstileToken('');
       } else {
@@ -208,12 +235,20 @@ export function RegisterPage() {
                           onClick={sendVerificationCode}
                           disabled={
                             isLoading ||
+                            resendCooldown > 0 ||
                             !emailValue ||
                             !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailValue) ||
                             (systemStatus?.turnstile_check && !turnstileToken)
                           }
+                          className="min-w-[120px] tabular-nums"
                         >
-                          {isLoading ? t('auth.register.sending') : isEmailSent ? t('auth.register.sent') : t('auth.register.send_code')}
+                          {isLoading
+                            ? t('auth.register.sending')
+                            : resendCooldown > 0
+                              ? t('auth.register.resend_in', { seconds: resendCooldown })
+                              : isEmailSent
+                                ? t('auth.register.sent')
+                                : t('auth.register.send_code')}
                         </Button>
                       </div>
                     </FormControl>

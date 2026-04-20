@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Checkbox } from '@/components/ui/checkbox';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { useNotifications } from '@/components/ui/notifications';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { api } from '@/lib/api';
@@ -36,7 +37,10 @@ type OperationForm = z.infer<typeof operationSchema>;
 
 export function OperationSettings() {
   const { t } = useTranslation();
+  const { notify } = useNotifications();
   const [loading, setLoading] = useState(true);
+  const [savingGroup, setSavingGroup] = useState<'quota' | 'general' | 'monitor' | null>(null);
+  const [clearingLogs, setClearingLogs] = useState(false);
   const [historyTimestamp, setHistoryTimestamp] = useState('');
 
   // Descriptions for each setting used on this page
@@ -116,52 +120,92 @@ export function OperationSettings() {
     }
   };
 
-  const updateOption = async (key: string, value: string | number | boolean) => {
+  const updateOption = async (key: string, value: string | number | boolean, opts?: { silent?: boolean }) => {
     try {
       // Unified API call - complete URL with /api prefix
       await api.put('/api/option/', { key, value: String(value) });
-    } catch (error) {
-      console.error(`Error updating ${key}:`, error);
+      if (!opts?.silent) {
+        notify({
+          type: 'success',
+          title: t('system_settings.saved_success'),
+          message: t('system_settings.saved_message', { key }),
+        });
+      }
+    } catch (error: any) {
+      const errMsg = error?.response?.data?.message || error?.message || 'Unknown error';
+      notify({
+        type: 'error',
+        title: t('system_settings.save_failed'),
+        message: `${key}: ${errMsg}`,
+      });
+      throw error;
     }
   };
 
   const onSubmitGroup = async (group: 'quota' | 'general' | 'monitor') => {
     const values = form.getValues();
-
-    switch (group) {
-      case 'quota':
-        await updateOption('QuotaForNewUser', values.QuotaForNewUser);
-        await updateOption('QuotaForInviter', values.QuotaForInviter);
-        await updateOption('QuotaForInvitee', values.QuotaForInvitee);
-        await updateOption('PreConsumedQuota', values.PreConsumedQuota);
-        break;
-      case 'general':
-        await updateOption('TopUpLink', values.TopUpLink);
-        await updateOption('ChatLink', values.ChatLink);
-        await updateOption('QuotaPerUnit', values.QuotaPerUnit);
-        await updateOption('RetryTimes', values.RetryTimes);
-        break;
-      case 'monitor':
-        await updateOption('QuotaRemindThreshold', values.QuotaRemindThreshold);
-        await updateOption('ChannelDisableThreshold', values.ChannelDisableThreshold);
-        break;
+    setSavingGroup(group);
+    try {
+      switch (group) {
+        case 'quota':
+          await updateOption('QuotaForNewUser', values.QuotaForNewUser, { silent: true });
+          await updateOption('QuotaForInviter', values.QuotaForInviter, { silent: true });
+          await updateOption('QuotaForInvitee', values.QuotaForInvitee, { silent: true });
+          await updateOption('PreConsumedQuota', values.PreConsumedQuota, { silent: true });
+          break;
+        case 'general':
+          await updateOption('TopUpLink', values.TopUpLink, { silent: true });
+          await updateOption('ChatLink', values.ChatLink, { silent: true });
+          await updateOption('QuotaPerUnit', values.QuotaPerUnit, { silent: true });
+          await updateOption('RetryTimes', values.RetryTimes, { silent: true });
+          break;
+        case 'monitor':
+          await updateOption('QuotaRemindThreshold', values.QuotaRemindThreshold, { silent: true });
+          await updateOption('ChannelDisableThreshold', values.ChannelDisableThreshold, { silent: true });
+          break;
+      }
+      notify({
+        type: 'success',
+        title: t('system_settings.saved_success'),
+        message: t(`operation_settings.${group}.title`),
+      });
+    } catch {
+      // updateOption already surfaced an error toast
+    } finally {
+      setSavingGroup(null);
     }
   };
 
   const deleteHistoryLogs = async () => {
     if (!historyTimestamp) return;
+    setClearingLogs(true);
     try {
       const timestamp = Date.parse(historyTimestamp) / 1000;
       // Unified API call - complete URL with /api prefix
       const res = await api.delete(`/api/log/?target_timestamp=${timestamp}`);
       const { success, message, data } = res.data;
       if (success) {
-        // Log clearing succeeded
+        notify({
+          type: 'success',
+          title: t('operation_settings.logs.title'),
+          message: typeof data === 'number' ? `${data} ${t('operation_settings.logs.cleared_count', { defaultValue: 'records cleared' })}` : t('system_settings.saved_success'),
+        });
       } else {
-        console.error(t('operation_settings.logs.clear_failed', { message }));
+        notify({
+          type: 'error',
+          title: t('operation_settings.logs.clear_failed', { message: '' }),
+          message: message || 'Unknown error',
+        });
       }
-    } catch (error) {
-      console.error('Error clearing logs:', error);
+    } catch (error: any) {
+      const errMsg = error?.response?.data?.message || error?.message || 'Unknown error';
+      notify({
+        type: 'error',
+        title: t('operation_settings.logs.clear_failed', { message: '' }),
+        message: errMsg,
+      });
+    } finally {
+      setClearingLogs(false);
     }
   };
 
@@ -302,7 +346,9 @@ export function OperationSettings() {
                 />
               </div>
               <div className="mt-4">
-                <Button onClick={() => onSubmitGroup('quota')}>{t('operation_settings.quota.save')}</Button>
+                <Button onClick={() => onSubmitGroup('quota')} disabled={savingGroup === 'quota'}>
+                  {savingGroup === 'quota' ? t('common.saving', { defaultValue: 'Saving…' }) : t('operation_settings.quota.save')}
+                </Button>
               </div>
             </Form>
           </CardContent>
@@ -551,7 +597,9 @@ export function OperationSettings() {
               </div>
 
               <div className="mt-4">
-                <Button onClick={() => onSubmitGroup('general')}>{t('operation_settings.general.save')}</Button>
+                <Button onClick={() => onSubmitGroup('general')} disabled={savingGroup === 'general'}>
+                  {savingGroup === 'general' ? t('common.saving', { defaultValue: 'Saving…' }) : t('operation_settings.general.save')}
+                </Button>
               </div>
             </Form>
           </CardContent>
@@ -686,7 +734,9 @@ export function OperationSettings() {
               </div>
 
               <div className="mt-4">
-                <Button onClick={() => onSubmitGroup('monitor')}>{t('operation_settings.monitoring.save')}</Button>
+                <Button onClick={() => onSubmitGroup('monitor')} disabled={savingGroup === 'monitor'}>
+                  {savingGroup === 'monitor' ? t('common.saving', { defaultValue: 'Saving…' }) : t('operation_settings.monitoring.save')}
+                </Button>
               </div>
             </Form>
           </CardContent>
@@ -701,8 +751,8 @@ export function OperationSettings() {
           <CardContent>
             <div className="flex items-center space-x-4">
               <Input type="date" value={historyTimestamp} onChange={(e) => setHistoryTimestamp(e.target.value)} className="w-auto" />
-              <Button variant="destructive" onClick={deleteHistoryLogs}>
-                {t('operation_settings.logs.clear_button')}
+              <Button variant="destructive" onClick={deleteHistoryLogs} disabled={clearingLogs || !historyTimestamp}>
+                {clearingLogs ? t('common.saving', { defaultValue: 'Saving…' }) : t('operation_settings.logs.clear_button')}
               </Button>
             </div>
             <p className="text-sm text-muted-foreground mt-2">{t('operation_settings.logs.clear_warning')}</p>

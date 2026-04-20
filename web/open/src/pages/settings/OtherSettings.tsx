@@ -2,6 +2,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Input } from '@/components/ui/input';
+import { useNotifications } from '@/components/ui/notifications';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { api } from '@/lib/api';
@@ -26,7 +27,10 @@ type OtherForm = z.infer<typeof otherSchema>;
 
 export function OtherSettings() {
   const { t } = useTranslation();
+  const { notify } = useNotifications();
   const [loading, setLoading] = useState(true);
+  const [savingField, setSavingField] = useState<keyof OtherForm | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateData, setUpdateData] = useState<{
     tag_name: string;
     content: string;
@@ -81,32 +85,55 @@ export function OtherSettings() {
     }
   };
 
-  const updateOption = async (key: string, value: string) => {
+  const submitField = async (key: keyof OtherForm) => {
+    const value = form.getValues(key);
+    setSavingField(key);
     try {
-      setLoading(true);
-      // Unified API call - complete URL with /api prefix
       await api.put('/api/option/', { key, value });
-    } catch (error) {
-      console.error(`Error updating ${key}:`, error);
+      notify({
+        type: 'success',
+        title: t('system_settings.saved_success'),
+        message: t('system_settings.saved_message', { key }),
+      });
+    } catch (error: any) {
+      const errMsg = error?.response?.data?.message || error?.message || 'Unknown error';
+      notify({
+        type: 'error',
+        title: t('system_settings.save_failed'),
+        message: `${key}: ${errMsg}`,
+      });
     } finally {
-      setLoading(false);
+      setSavingField(null);
     }
   };
 
-  const submitField = async (key: keyof OtherForm) => {
-    const value = form.getValues(key);
-    await updateOption(key, value);
-  };
-
   const checkUpdate = async () => {
+    setCheckingUpdate(true);
     try {
       const res = await fetch('https://api.github.com/repos/Laisky/one-api/releases/latest');
       const data = await res.json();
       if (data.tag_name) {
         setUpdateData(data);
+        notify({
+          type: 'success',
+          title: t('other_settings.updates.title'),
+          message: t('other_settings.updates.update_available', { version: data.tag_name }),
+        });
+      } else {
+        notify({
+          type: 'info',
+          title: t('other_settings.updates.title'),
+          message: t('other_settings.updates.no_update', { defaultValue: 'You are on the latest version.' }),
+        });
       }
-    } catch (error) {
-      console.error('Error checking for updates:', error);
+    } catch (error: any) {
+      notify({
+        type: 'error',
+        title: t('other_settings.updates.title'),
+        message: error?.message || 'Unknown error',
+      });
+    } finally {
+      setCheckingUpdate(false);
     }
   };
 
@@ -163,7 +190,9 @@ export function OtherSettings() {
                         <FormControl>
                           <Input placeholder="One API" {...field} />
                         </FormControl>
-                        <Button onClick={() => submitField('SystemName')}>{t('other_settings.branding.save')}</Button>
+                        <Button onClick={() => submitField('SystemName')} disabled={savingField === 'SystemName'}>
+                          {savingField === 'SystemName' ? t('common.saving', { defaultValue: 'Saving…' }) : t('other_settings.branding.save')}
+                        </Button>
                       </div>
                       <FormMessage />
                     </FormItem>
@@ -192,7 +221,9 @@ export function OtherSettings() {
                         <FormControl>
                           <Input placeholder="https://..." {...field} />
                         </FormControl>
-                        <Button onClick={() => submitField('Logo')}>{t('other_settings.branding.save')}</Button>
+                        <Button onClick={() => submitField('Logo')} disabled={savingField === 'Logo'}>
+                          {savingField === 'Logo' ? t('common.saving', { defaultValue: 'Saving…' }) : t('other_settings.branding.save')}
+                        </Button>
                       </div>
                       <FormMessage />
                     </FormItem>
@@ -221,7 +252,9 @@ export function OtherSettings() {
                         <FormControl>
                           <Input placeholder="modern" {...field} />
                         </FormControl>
-                        <Button onClick={() => submitField('Theme')}>{t('other_settings.branding.save')}</Button>
+                        <Button onClick={() => submitField('Theme')} disabled={savingField === 'Theme'}>
+                          {savingField === 'Theme' ? t('common.saving', { defaultValue: 'Saving…' }) : t('other_settings.branding.save')}
+                        </Button>
                       </div>
                       <FormMessage />
                     </FormItem>
@@ -263,7 +296,9 @@ export function OtherSettings() {
                         <FormControl>
                           <Textarea placeholder={t('other_settings.content.notice_placeholder')} className="min-h-[100px]" {...field} />
                         </FormControl>
-                        <Button onClick={() => submitField('Notice')}>{t('other_settings.content.save_notice')}</Button>
+                        <Button onClick={() => submitField('Notice')} disabled={savingField === 'Notice'}>
+                          {savingField === 'Notice' ? t('common.saving', { defaultValue: 'Saving…' }) : t('other_settings.content.save_notice')}
+                        </Button>
                       </div>
                       <FormMessage />
                     </FormItem>
@@ -292,7 +327,9 @@ export function OtherSettings() {
                         <FormControl>
                           <Textarea placeholder={t('other_settings.content.about_placeholder')} className="min-h-[100px]" {...field} />
                         </FormControl>
-                        <Button onClick={() => submitField('About')}>{t('other_settings.content.save_about')}</Button>
+                        <Button onClick={() => submitField('About')} disabled={savingField === 'About'}>
+                          {savingField === 'About' ? t('common.saving', { defaultValue: 'Saving…' }) : t('other_settings.content.save_about')}
+                        </Button>
                       </div>
                       <FormMessage />
                     </FormItem>
@@ -321,7 +358,9 @@ export function OtherSettings() {
                         <FormControl>
                           <Textarea placeholder={t('other_settings.content.home_page_placeholder')} className="min-h-[100px]" {...field} />
                         </FormControl>
-                        <Button onClick={() => submitField('HomePageContent')}>{t('other_settings.content.save_home_page')}</Button>
+                        <Button onClick={() => submitField('HomePageContent')} disabled={savingField === 'HomePageContent'}>
+                          {savingField === 'HomePageContent' ? t('common.saving', { defaultValue: 'Saving…' }) : t('other_settings.content.save_home_page')}
+                        </Button>
                       </div>
                       <FormMessage />
                     </FormItem>
@@ -350,7 +389,9 @@ export function OtherSettings() {
                         <FormControl>
                           <Textarea placeholder={t('other_settings.content.footer_placeholder')} className="min-h-[80px]" {...field} />
                         </FormControl>
-                        <Button onClick={() => submitField('Footer')}>{t('other_settings.content.save_footer')}</Button>
+                        <Button onClick={() => submitField('Footer')} disabled={savingField === 'Footer'}>
+                          {savingField === 'Footer' ? t('common.saving', { defaultValue: 'Saving…' }) : t('other_settings.content.save_footer')}
+                        </Button>
                       </div>
                       <FormMessage />
                     </FormItem>
@@ -370,7 +411,9 @@ export function OtherSettings() {
           <CardContent>
             <div className="space-y-4">
               <div className="flex gap-2">
-                <Button onClick={checkUpdate}>{t('other_settings.updates.check_update')}</Button>
+                <Button onClick={checkUpdate} disabled={checkingUpdate}>
+                  {checkingUpdate ? t('common.saving', { defaultValue: 'Saving…' }) : t('other_settings.updates.check_update')}
+                </Button>
                 <Button variant="outline" onClick={openGitHubRelease}>
                   {t('other_settings.updates.view_releases')}
                 </Button>
