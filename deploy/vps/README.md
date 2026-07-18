@@ -12,6 +12,8 @@ UNIT23 one-api runs on a self-managed **Oracle Linux aarch64** host, exposed pub
 | Database | Postgres 16 (Podman `oneapi-pg`, bind `127.0.0.1:5432`) |
 | Cache | Redis 7 (Podman `oneapi-redis`, bind `127.0.0.1:6379`) |
 | UI theme | `THEME=open` |
+| Min Stripe top-up | **$5** (`MIN_TOPUP_USD` / options `MinTopUpUSD`) |
+| Email | Resend · from `oneapi@unit23.xyz` (domain **unit23.xyz** verified in Resend) |
 | Public 80/443 | **Closed** (firewalld + no Caddy); tunnel only |
 | Admin access | SSH / Tailscale (not public HTTP) |
 
@@ -26,11 +28,13 @@ Completed:
 - [x] DNS: `oneapi.unit23api.com` CNAME → Cloudflare Tunnel (proxied)
 - [x] `cloudflared` connector registered and running
 - [x] Host firewall no longer exposes http/https; direct public IP access blocked
+- [x] `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` synced onto VPS `.env` (from Railway)
+- [x] `RESEND_API_KEY` + `EMAIL_PROVIDER=resend` on VPS; DB `SMTPFrom=oneapi@unit23.xyz`
+- [x] Minimum top-up lowered to **$5** (env, options table, open UI + binary rebuild)
 
 Still operator / Phase 2:
 
-- [ ] Confirm Stripe webhook endpoint points at `https://oneapi.unit23api.com/api/payment/stripe/webhook`
-- [ ] Ensure `STRIPE_*` / `RESEND_*` (or admin options) are set on the VPS `.env` / options table
+- [ ] Confirm Stripe Dashboard webhook URL is `https://oneapi.unit23api.com/api/payment/stripe/webhook` (not Railway)
 - [ ] Rotate temporary smoke passwords and any tokens shared during cutover
 - [ ] Decommission Railway after a 7–14 day soak (optional rollback window)
 - [ ] Optional: weekly upstream merge cadence; upgrade `cloudflared` binary
@@ -130,8 +134,25 @@ chmod 600 deploy/vps/.env
 Important:
 
 - `SESSION_SECRET` length must be **16, 24, or 32 bytes** (AES for securecookie). Prefer a 32-character secret or base64-decoded 32-byte value as documented in `.env.example`.
+- `MIN_TOPUP_USD=5` — also stored as options key `MinTopUpUSD` (UI open theme embeds the same floor).
+- Stripe: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` (env). Webhook path: `/api/payment/stripe/webhook`.
+- Resend: `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` (env). Sender display uses options `SMTPFrom` (production: `oneapi@unit23.xyz`) + `SystemName`.
 - Postgres and Redis on production bind to **localhost** only.
 - Never commit `.env`, `cert.pem`, or tunnel credential JSON.
+
+### Payments and email (product config)
+
+| Setting | Production value | Where |
+|---------|------------------|--------|
+| Minimum top-up | **$5 USD** | `MIN_TOPUP_USD` env + `options.MinTopUpUSD` + TopUp UI |
+| Preset amounts (open UI) | $5, $10, $20, $50, $100 | `web/open/.../TopUpPage.tsx` |
+| Stripe secret / webhook secret | set on host | VPS `.env` |
+| Email provider | `resend` | env + `options.EmailProvider` |
+| Resend API key | set on host | VPS `.env` |
+| From address | `oneapi@unit23.xyz` | `options.SMTPFrom` |
+| Resend verified domain | `unit23.xyz` | Resend dashboard (not `unit23api.com`) |
+
+Product site hostname is **`oneapi.unit23api.com`**. Transactional mail uses the verified Resend domain **`unit23.xyz`** — that split is intentional and correct.
 
 ## Cloudflare Tunnel notes
 

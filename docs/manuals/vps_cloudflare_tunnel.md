@@ -64,9 +64,20 @@ loginctl show-user opc -p Linger   # should be yes
 - Do not commit Cloudflare API tokens, tunnel tokens, or `cert-*.pem` downloads into git.
 - After any cutover smoke that resets admin passwords, rotate credentials again for production use.
 
+## Billing and email (Phase 1+)
+
+| Item | Status |
+|------|--------|
+| Stripe keys on VPS `.env` | Configured (synced from Railway) |
+| Stripe webhook URL in Dashboard | Confirm → `https://oneapi.unit23api.com/api/payment/stripe/webhook` |
+| Minimum top-up | **$5** (`MIN_TOPUP_USD` / `MinTopUpUSD`) |
+| Resend API key + `EMAIL_PROVIDER=resend` | Configured on VPS |
+| From address | `oneapi@unit23.xyz` (`options.SMTPFrom`) |
+| Resend domain | **`unit23.xyz` verified** (mail domain; product URL remains `unit23api.com`) |
+
 ## Phase 2 follow-ups
 
-- Stripe webhook URL and live keys on VPS
-- Resend provider verification on the new origin
+- Confirm Stripe Dashboard webhook points at the tunnel hostname (not Railway)
 - Railway project teardown after soak
 - Optional `cloudflared` binary upgrade when convenient
+- Rotate any temporary cutover passwords
