@@ -1,13 +1,15 @@
-# Reverse proxy for one-api. Replace the hostname for production TLS.
-# For IP-only smoke tests, use :80 without automatic HTTPS.
+# Optional reverse proxy for emergency public 80/443 (NOT used in Phase 1 production).
+# Production ingress is Cloudflare Tunnel → 127.0.0.1:3000; host firewall keeps http/https closed.
+# Only enable this if cloudflared is down and you intentionally re-open ports.
 
 {
-	# email used for Let's Encrypt registration (optional override via env not supported here)
+	# email used for Let's Encrypt registration (optional)
 	# admin email@example.com
 }
 
 oneapi.unit23api.com {
 	encode gzip
+	# Compose network service name; for host-network Caddy use 127.0.0.1:3000 instead.
 	reverse_proxy one-api:3000
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
@@ -16,7 +18,6 @@ oneapi.unit23api.com {
 	}
 }
 
-# Fallback HTTP for smoke on public IP before DNS cutover
 :80 {
 	encode gzip
 	reverse_proxy one-api:3000

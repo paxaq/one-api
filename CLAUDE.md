@@ -8,7 +8,7 @@ One API is a unified gateway / OpenRouter-style proxy that aggregates many upstr
 
 ## Common Commands
 
-Backend (Go 1.25):
+Backend (Go 1.26 on current product branch):
 - `go vet ./...` — required after changes
 - `go test -race ./...` — required after changes
 - Run a single test: `go test -race -run TestName ./path/to/pkg`
@@ -18,11 +18,13 @@ Backend (Go 1.25):
 
 Frontend (use **yarn**, not npm — npm causes `yarn.lock` conflicts):
 - `make dev` / `make dev-modern` — Modern dev server (port 3001)
-- `make dev-air` (3002), `make dev-berry` (3003)
+- `make dev-air` (3002), `make dev-berry` (3003), `make dev-open` (3004)
 - `make build-frontend-modern` — required after frontend changes; output embedded into the Go binary via `//go:embed web/build/*`
-- `make build-all-templates` — build Modern + Berry + Air
+- `make build-all-templates` — build Modern + Berry + Air + open
 
-Templates: Modern, Berry, Air (the legacy "default" theme is auto-redirected to Modern). **Prioritize Modern**; the others are kept for compatibility only.
+Templates: Modern, Berry, Air, open (the legacy "default" theme is auto-redirected to Modern). **Prioritize Modern** for new features; **open** is the UNIT23 production theme on VPS; others are kept for compatibility only.
+
+Production host (Phase 1): VPS + Cloudflare Tunnel — see `deploy/vps/README.md` and `docs/manuals/vps_cloudflare_tunnel.md`.
 
 ## Architecture
 

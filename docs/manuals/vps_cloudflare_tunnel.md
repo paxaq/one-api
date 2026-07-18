@@ -1,0 +1,72 @@
+# VPS + Cloudflare Tunnel operations (UNIT23)
+
+This manual describes the **Phase 1 production** layout for UNIT23 one-api on Oracle Cloud arm64 with Cloudflare Tunnel ingress.
+
+For file layout, rebuild, and backup commands, see [deploy/vps/README.md](../../deploy/vps/README.md).
+
+## Goals of Phase 1
+
+1. Leave Railway as the sole always-on host for production.
+2. Keep product customizations: Stripe Checkout, Resend email, open theme.
+3. Expose `https://oneapi.unit23api.com` without opening origin 80/443 to the internet.
+
+## Traffic path
+
+```text
+Client
+  → Cloudflare (HTTPS, proxied DNS)
+  → Cloudflare Tunnel edge
+  → cloudflared on VPS (outbound QUIC)
+  → one-api listening on 127.0.0.1:3000
+```
+
+DNS record shape:
+
+- Type: **CNAME**
+- Name: `oneapi`
+- Target: `<tunnel-uuid>.cfargotunnel.com`
+- Proxy: **Proxied** (orange cloud)
+
+## Host firewall posture
+
+Expected `firewall-cmd --list-services` on the app host:
+
+```text
+dhcpv6-client ssh
+```
+
+Do **not** publish Postgres (`5432`) or Redis (`6379`) on `0.0.0.0`.
+
+## systemd units (user)
+
+| Unit | Role |
+|------|------|
+| `one-api.service` | Application binary |
+| `cloudflared.service` | Tunnel connector |
+
+```bash
+systemctl --user status one-api cloudflared
+loginctl show-user opc -p Linger   # should be yes
+```
+
+## Failure modes
+
+| Symptom | Likely cause | Action |
+|---------|--------------|--------|
+| Domain 502/1033 | `cloudflared` down | `systemctl --user restart cloudflared`; check `tunnel info` |
+| Domain 521 (legacy) | Origin 80/443 closed without tunnel | Do not re-open ports; fix tunnel |
+| Login cookie ignored on HTTP | `Secure` session cookies | Always use HTTPS product URL |
+| App up, empty data | Wrong `SQL_DSN` or Postgres container stopped | `podman ps`; verify `.env` |
+
+## Security notes
+
+- Tunnel origin certificate (`cert.pem`) and `*.json` credentials are secrets; keep them only under `~/.cloudflared/` on the host.
+- Do not commit Cloudflare API tokens, tunnel tokens, or `cert-*.pem` downloads into git.
+- After any cutover smoke that resets admin passwords, rotate credentials again for production use.
+
+## Phase 2 follow-ups
+
+- Stripe webhook URL and live keys on VPS
+- Resend provider verification on the new origin
+- Railway project teardown after soak
+- Optional `cloudflared` binary upgrade when convenient
