@@ -36,7 +36,7 @@ Still operator / Phase 2:
 
 - [ ] Confirm Stripe Dashboard webhook URL is `https://oneapi.unit23api.com/api/payment/stripe/webhook` (not Railway)
 - [ ] Rotate temporary smoke passwords and any tokens shared during cutover
-- [ ] Decommission Railway after a 7–14 day soak (optional rollback window)
+- [x] Decommission Railway project `oneapi_railway` (deleted via CLI; VPS is sole production)
 - [ ] Optional: weekly upstream merge cadence; upgrade `cloudflared` binary
 
 ## Repository layout

@@ -75,9 +75,14 @@ loginctl show-user opc -p Linger   # should be yes
 | From address | `oneapi@unit23.xyz` (`options.SMTPFrom`) |
 | Resend domain | **`unit23.xyz` verified** (mail domain; product URL remains `unit23api.com`) |
 
+## Railway decommission
+
+Project **`oneapi_railway`** (`47e562ca-e39c-4325-bc97-96a7e52cb4f7`) was deleted with Railway CLI (`railway delete --project … --yes`). Services that lived there: `one-api`, `Postgres`, `Redis`. Production traffic is VPS + Cloudflare Tunnel only.
+
+Repo still contains `Dockerfile.railway` / `railway.json` as optional emergency references, not an active deploy.
+
 ## Phase 2 follow-ups
 
 - Confirm Stripe Dashboard webhook points at the tunnel hostname (not Railway)
-- Railway project teardown after soak
 - Optional `cloudflared` binary upgrade when convenient
 - Rotate any temporary cutover passwords
