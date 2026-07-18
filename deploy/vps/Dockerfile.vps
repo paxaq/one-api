@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1.7
+# Slim arm64-oriented image for VPS: builds modern + open themes only (disk/RAM safe).
+
+ARG NODE_IMAGE=node:24-bookworm
+ARG GO_IMAGE=golang:1.26.3-bookworm
+
+#############################
+# Stage 1: Frontend build   #
+#############################
+FROM --platform=$BUILDPLATFORM ${NODE_IMAGE} AS web-builder
+WORKDIR /web
+COPY web/ ./
+ENV YARN_ENABLE_IMMUTABLE_INSTALLS=0
+ENV DISABLE_ESLINT_PLUGIN=true
+RUN set -e; for theme in modern open; do \
+        echo "==> installing deps for $theme"; \
+        (cd /web/$theme && yarn install --network-timeout 600000); \
+    done
+RUN mkdir -p /web/build
+RUN set -e; BUILD_ID=$(date +%s); \
+        for theme in modern open; do \
+                echo "==> building $theme (build_id=$BUILD_ID)"; \
+                REACT_APP_VERSION=$BUILD_ID yarn --cwd /web/$theme run build; \
+        done
+
+############################
+# Stage 2: Go build        #
+############################
+FROM ${GO_IMAGE} AS go-builder
+ARG TARGETOS
+ARG TARGETARCH
+ENV CGO_ENABLED=1 GO111MODULE=on TZ=Etc/UTC
+RUN set -e; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends sqlite3 libsqlite3-dev ca-certificates; \
+        rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+COPY --from=web-builder /web/build ./web/build
+RUN echo "Building one-api for ${TARGETOS:-linux}/${TARGETARCH:-$(go env GOARCH)}" && \
+        GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-$(go env GOARCH)} \
+        go build -trimpath -ldflags "-s -w" -o /out/one-api .
+
+#############################
+# Stage 3: Runtime         #
+#############################
+FROM debian:bookworm-slim AS final
+ENV DEBIAN_FRONTEND=noninteractive TZ=Etc/UTC
+RUN set -e; \
+        apt-get update; \
+        apt-get install -y --no-install-recommends ca-certificates tzdata curl libsqlite3-0 gosu; \
+        rm -rf /var/lib/apt/lists/*
+COPY --from=go-builder /out/one-api /one-api
+EXPOSE 3000
+ARG ONEAPI_UID=10001
+ARG ONEAPI_GID=10001
+RUN groupadd --system --gid ${ONEAPI_GID} oneapi && \
+        useradd --system --no-create-home --home /data --uid ${ONEAPI_UID} --gid ${ONEAPI_GID} \
+                --shell /usr/sbin/nologin oneapi && \
+        mkdir -p /data && chown oneapi:oneapi /one-api /data
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+WORKDIR /data
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -fsS http://127.0.0.1:3000/api/status || exit 1
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]

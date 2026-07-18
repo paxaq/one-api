@@ -41,3 +41,8 @@ __pycache__/
 *.pyc
 # Log files written by model-package tests that run the server logger
 /model/logs/
+
+# VPS secrets and dumps
+deploy/vps/.env
+deploy/vps/backups/
+
