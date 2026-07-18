@@ -9,19 +9,22 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/common/graceful"
-	"github.com/songquanpeng/one-api/common/tracing"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay"
-	"github.com/songquanpeng/one-api/relay/adaptor"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai"
-	"github.com/songquanpeng/one-api/relay/billing"
-	"github.com/songquanpeng/one-api/relay/meta"
-	rmodel "github.com/songquanpeng/one-api/relay/model"
-	"github.com/songquanpeng/one-api/relay/pricing"
-	quotautil "github.com/songquanpeng/one-api/relay/quota"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/common/graceful"
+	"github.com/Laisky/one-api/common/relayctx"
+	"github.com/Laisky/one-api/common/tracing"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay"
+	"github.com/Laisky/one-api/relay/adaptor"
+	"github.com/Laisky/one-api/relay/adaptor/openai"
+	"github.com/Laisky/one-api/relay/apitype"
+	"github.com/Laisky/one-api/relay/billing"
+	"github.com/Laisky/one-api/relay/meta"
+	rmodel "github.com/Laisky/one-api/relay/model"
+	"github.com/Laisky/one-api/relay/pricing"
+	quotautil "github.com/Laisky/one-api/relay/quota"
+	"github.com/Laisky/one-api/relay/relaymode"
 )
 
 // Realtime session preConsume estimation constants.
@@ -70,14 +73,14 @@ func RelayRealtime(c *gin.Context) {
 
 	pricingAdaptor := resolveRealtimePricingAdaptor(relayMeta)
 	modelName := relayMeta.ActualModelName
-	modelRatio := pricing.GetModelRatioWithThreeLayers(modelName, channelModelRatio, pricingAdaptor)
+	modelRatio := pricing.ResolveModelRatioAt(modelName, channelModelConfigs, channelModelRatio, pricingAdaptor, relayMeta.StartTime)
 	groupRatio := c.GetFloat64(ctxkey.ChannelRatio)
 
 	// ── Step 2: Pre-consume quota ───────────────────────────────────────
 	// Estimate based on a short audio conversation.
 	// Use audio pricing when available (much higher than text), fall back to text.
 	preConsumedQuota := estimateRealtimePreConsumeQuota(
-		modelName, modelRatio, groupRatio, channelModelConfigs, pricingAdaptor)
+		modelName, modelRatio, groupRatio, channelModelConfigs, pricingAdaptor, relayMeta.StartTime)
 
 	// Check user quota before allowing the session
 	userQuota, err := model.CacheGetUserQuota(ctx, relayMeta.UserId)
@@ -212,7 +215,7 @@ func postConsumeRealtimeQuota(
 	// contain audio tokens that cost significantly more. Add the delta as a
 	// surcharge to usage.ToolsCost so it's included in the total quota.
 	applyRealtimeAudioSurcharge(usage, modelName, modelRatio, groupRatio,
-		channelModelRatio, channelModelConfigs, pricingAdaptor, lg)
+		channelModelRatio, channelModelConfigs, pricingAdaptor, lg, relayMeta.StartTime)
 
 	// ── Compute actual quota from usage ─────────────────────────────────
 	computeResult := quotautil.Compute(quotautil.ComputeInput{
@@ -224,6 +227,7 @@ func postConsumeRealtimeQuota(
 		ChannelModelConfigs:    channelModelConfigs,
 		ChannelCompletionRatio: channelCompletionRatio,
 		PricingAdaptor:         pricingAdaptor,
+		RequestTime:            relayMeta.StartTime,
 	})
 
 	totalQuota := computeResult.TotalQuota
@@ -254,31 +258,43 @@ func postConsumeRealtimeQuota(
 	// Mark billing reconciled so the safety net doesn't fire
 	rtMarkBillingReconciled(c)
 
-	// Run billing in a critical goroutine so graceful shutdown waits for it
-	graceful.GoCritical(gmw.BackgroundCtx(c), "realtimePostBilling", func(ctx context.Context) {
+	// Run billing in a critical goroutine so graceful shutdown waits for it. Detach
+	// gives it a non-cancelled, c-free context; all identifiers it bills with
+	// (relayMeta, requestId, traceId) are value-captured above before the spawn.
+	graceful.GoCritical(relayctx.Detach(c), "realtimePostBilling", func(ctx context.Context) {
 		billingTimeout := time.Duration(config.BillingTimeoutSec) * time.Second
 		ctx, cancel := context.WithTimeout(ctx, billingTimeout)
 		defer cancel()
 
+		userAPIFormat := ""
+		if relayMeta.Mode != relaymode.Unknown {
+			userAPIFormat = relaymode.String(relayMeta.Mode)
+		}
 		billing.PostConsumeQuotaDetailed(billing.QuotaConsumeDetail{
-			Ctx:              ctx,
-			TokenId:          relayMeta.TokenId,
-			QuotaDelta:       quotaDelta,
-			TotalQuota:       totalQuota,
-			UserId:           relayMeta.UserId,
-			ChannelId:        relayMeta.ChannelId,
-			PromptTokens:     computeResult.PromptTokens,
-			CompletionTokens: computeResult.CompletionTokens,
-			ModelRatio:       computeResult.UsedModelRatio,
-			GroupRatio:       groupRatio,
-			ModelName:        modelName,
-			TokenName:        relayMeta.TokenName,
-			IsStream:         true,
-			StartTime:        relayMeta.StartTime,
-			CompletionRatio:  computeResult.UsedCompletionRatio,
-			RequestId:        requestId,
-			TraceId:          traceId,
-			ProvisionalLogId: provisionalLogId,
+			Ctx:               ctx,
+			TokenId:           relayMeta.TokenId,
+			QuotaDelta:        quotaDelta,
+			TotalQuota:        totalQuota,
+			UserId:            relayMeta.UserId,
+			UserUUID:          relayMeta.UserUUID,
+			ChannelId:         relayMeta.ChannelId,
+			ChannelUUID:       relayMeta.ChannelUUID,
+			PromptTokens:      computeResult.PromptTokens,
+			CompletionTokens:  computeResult.CompletionTokens,
+			ModelRatio:        computeResult.UsedModelRatio,
+			GroupRatio:        groupRatio,
+			ModelName:         modelName,
+			TokenUUID:         relayMeta.TokenUUID,
+			TokenName:         relayMeta.TokenName,
+			IsStream:          true,
+			StartTime:         relayMeta.StartTime,
+			CompletionRatio:   computeResult.UsedCompletionRatio,
+			RequestId:         requestId,
+			TraceId:           traceId,
+			ProvisionalLogId:  provisionalLogId,
+			UserAPIFormat:     userAPIFormat,
+			UpstreamAPIFormat: apitype.String(relayMeta.APIType),
+			UpstreamEndpoint:  relayMeta.UpstreamRequestURL,
 		})
 	})
 

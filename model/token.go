@@ -2,19 +2,17 @@ package model
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/Laisky/errors/v2"
 	"github.com/Laisky/zap"
 	"gorm.io/gorm"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/helper"
-	"github.com/songquanpeng/one-api/common/logger"
-	"github.com/songquanpeng/one-api/common/message"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/helper"
+	"github.com/Laisky/one-api/common/logger"
+	"github.com/Laisky/one-api/common/message"
 )
 
 const (
@@ -26,7 +24,9 @@ const (
 
 type Token struct {
 	Id             int     `json:"id"`
+	UUID           string  `json:"uuid" gorm:"type:char(36);column:uuid"`
 	UserId         int     `json:"user_id"`
+	UserUUID       *string `json:"user_uuid" gorm:"type:char(36);column:user_uuid;index"`
 	Key            string  `json:"key" gorm:"type:char(48);uniqueIndex"`
 	Status         int     `json:"status" gorm:"default:1"`
 	Name           string  `json:"name" gorm:"index" `
@@ -44,6 +44,7 @@ type Token struct {
 
 var tokenSortFields = map[string]string{
 	"id":           "id",
+	"uuid":         "uuid",
 	"name":         "name",
 	"status":       "status",
 	"expired_time": "expired_time",
@@ -51,55 +52,6 @@ var tokenSortFields = map[string]string{
 	"used_quota":   "used_quota",
 	"created_at":   "created_at",
 	"updated_at":   "updated_at",
-}
-
-// MarshalJSON ensures that any token serialized to JSON will include the configured key prefix.
-// This does not modify the stored key; it's applied only at response time.
-func (t Token) MarshalJSON() ([]byte, error) {
-	// Normalize: strip any known legacy prefixes from stored value, then apply configured prefix
-	raw := t.Key
-	raw = strings.TrimPrefix(raw, "sk-")
-	raw = strings.TrimPrefix(raw, "laisky-")
-	prefix := config.TokenKeyPrefix
-	if prefix == "" {
-		prefix = "sk-"
-	}
-
-	type tokenDTO struct {
-		Id             int     `json:"id"`
-		UserId         int     `json:"user_id"`
-		Key            string  `json:"key"`
-		Status         int     `json:"status"`
-		Name           string  `json:"name"`
-		CreatedTime    int64   `json:"created_time"`
-		AccessedTime   int64   `json:"accessed_time"`
-		ExpiredTime    int64   `json:"expired_time"`
-		RemainQuota    int64   `json:"remain_quota"`
-		UnlimitedQuota bool    `json:"unlimited_quota"`
-		UsedQuota      int64   `json:"used_quota"`
-		CreatedAt      int64   `json:"created_at"`
-		UpdatedAt      int64   `json:"updated_at"`
-		Models         *string `json:"models"`
-		Subnet         *string `json:"subnet"`
-	}
-	dto := tokenDTO{
-		Id:             t.Id,
-		UserId:         t.UserId,
-		Key:            prefix + raw,
-		Status:         t.Status,
-		Name:           t.Name,
-		CreatedTime:    t.CreatedTime,
-		AccessedTime:   t.AccessedTime,
-		ExpiredTime:    t.ExpiredTime,
-		RemainQuota:    t.RemainQuota,
-		UnlimitedQuota: t.UnlimitedQuota,
-		UsedQuota:      t.UsedQuota,
-		CreatedAt:      t.CreatedAt,
-		UpdatedAt:      t.UpdatedAt,
-		Models:         t.Models,
-		Subnet:         t.Subnet,
-	}
-	return json.Marshal(dto)
 }
 
 func clearTokenCache(ctx context.Context, key string) {
@@ -135,23 +87,64 @@ func GetAllUserTokens(userId int, startIdx int, num int, order string, sortBy st
 	}
 
 	err = query.Limit(num).Offset(startIdx).Find(&tokens).Error
-	return tokens, err
+	if err != nil {
+		return nil, errors.Wrapf(err, "get user %d tokens", userId)
+	}
+	return tokens, nil
 }
 
 func GetUserTokenCount(userId int) (count int64, err error) {
 	err = DB.Model(&Token{}).Where("user_id = ?", userId).Count(&count).Error
-	return count, err
+	if err != nil {
+		return 0, errors.Wrapf(err, "count user %d tokens", userId)
+	}
+	return count, nil
 }
 
 func SearchUserTokens(userId int, keyword string, startIdx int, num int, sortBy string, sortOrder string) (tokens []*Token, total int64, err error) {
 	db := DB.Model(&Token{}).Where("user_id = ?", userId)
 	if keyword != "" {
-		db = db.Where("name LIKE ?", keyword+"%")
+		db = db.Where("(name LIKE ? or uuid = ?)", keyword+"%", normalizeUUIDKeyword(keyword))
 	}
 	orderClause := ValidateOrderClause(sortBy, sortOrder, tokenSortFields, "id desc")
 	db = db.Order(orderClause)
 	err = db.Count(&total).Limit(num).Offset(startIdx).Find(&tokens).Error
-	return tokens, total, err
+	if err != nil {
+		return nil, 0, errors.Wrapf(err, "search user %d tokens", userId)
+	}
+	return tokens, total, nil
+}
+
+// GetAllTokensForAdmin lists tokens across any user. Pass userId > 0 to filter to a single owner,
+// or 0 to see every user's tokens. Admin-scoped and read-only — callers must enforce auth.
+func GetAllTokensForAdmin(userId int, startIdx int, num int, sortBy string, sortOrder string) (tokens []*Token, total int64, err error) {
+	db := DB.Model(&Token{})
+	if userId > 0 {
+		db = db.Where("user_id = ?", userId)
+	}
+	orderClause := ValidateOrderClause(sortBy, sortOrder, tokenSortFields, "id desc")
+	db = db.Order(orderClause)
+	err = db.Count(&total).Limit(num).Offset(startIdx).Find(&tokens).Error
+	if err != nil {
+		return nil, 0, errors.Wrapf(err, "admin list tokens for user_id=%d", userId)
+	}
+	return tokens, total, nil
+}
+
+// SearchAllTokensForAdmin searches tokens across any user by keyword (token name prefix match).
+// Admin-scoped and read-only — callers must enforce auth.
+func SearchAllTokensForAdmin(keyword string, startIdx int, num int, sortBy string, sortOrder string) (tokens []*Token, total int64, err error) {
+	db := DB.Model(&Token{})
+	if keyword != "" {
+		db = db.Where("(name LIKE ? or uuid = ?)", keyword+"%", normalizeUUIDKeyword(keyword))
+	}
+	orderClause := ValidateOrderClause(sortBy, sortOrder, tokenSortFields, "id desc")
+	db = db.Order(orderClause)
+	err = db.Count(&total).Limit(num).Offset(startIdx).Find(&tokens).Error
+	if err != nil {
+		return nil, 0, errors.Wrapf(err, "admin search tokens by keyword=%q", keyword)
+	}
+	return tokens, total, nil
 }
 
 func ValidateUserToken(ctx context.Context, key string) (token *Token, err error) {
@@ -163,11 +156,14 @@ func ValidateUserToken(ctx context.Context, key string) (token *Token, err error
 	}
 	token, err = CacheGetTokenByKey(ctx, key)
 	if err != nil {
+		// Mask the key: it must never appear verbatim in logs/errors, but keep
+		// the "token not found for key:" prefix that shouldLogAsWarning matches.
+		maskedKey := helper.MaskAPIKey(key)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, errors.Wrapf(err, "token not found for key: %s", key)
+			return nil, errors.Wrapf(err, "token not found for key: %s", maskedKey)
 		}
 
-		return nil, errors.Wrapf(err, "failed to get token by key: %s", key)
+		return nil, errors.Wrapf(err, "failed to get token by key: %s", maskedKey)
 	}
 
 	switch token.Status {
@@ -242,6 +238,15 @@ func GetTokenById(id int) (*Token, error) {
 func (t *Token) Insert(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	if t.UserUUID == nil && t.UserId > 0 {
+		userUUID, err := GetUserUUIDByID(t.UserId)
+		if err != nil {
+			return errors.Wrapf(err, "get token user uuid: user_id=%d", t.UserId)
+		}
+		if userUUID != "" {
+			t.UserUUID = &userUUID
+		}
 	}
 	var err error
 	err = DB.Create(t).Error

@@ -17,7 +17,7 @@ import (
 	"github.com/Laisky/zap/zapcore"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/config"
+	"github.com/Laisky/one-api/common/config"
 )
 
 var (
@@ -181,7 +181,7 @@ func (w *ginZapWriter) Write(p []byte) (int, error) {
 
 	if w.fallback != nil {
 		if _, err := w.fallback.Write(p); err != nil {
-			return 0, err
+			return 0, errors.Wrap(err, "write to fallback logger")
 		}
 	}
 

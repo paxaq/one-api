@@ -9,13 +9,14 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai"
-	"github.com/songquanpeng/one-api/relay/billing"
-	metalib "github.com/songquanpeng/one-api/relay/meta"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
-	quotautil "github.com/songquanpeng/one-api/relay/quota"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/adaptor/openai"
+	"github.com/Laisky/one-api/relay/apitype"
+	"github.com/Laisky/one-api/relay/billing"
+	metalib "github.com/Laisky/one-api/relay/meta"
+	relaymodel "github.com/Laisky/one-api/relay/model"
+	quotautil "github.com/Laisky/one-api/relay/quota"
 )
 
 // preConsumeClaudeMessagesQuota pre-consumes quota for Claude Messages API requests.
@@ -88,6 +89,7 @@ func postConsumeClaudeMessagesQuotaWithTraceID(ctx context.Context, requestId st
 		ChannelModelConfigs:    channelModelConfigs,
 		ChannelCompletionRatio: channelCompletionRatio,
 		PricingAdaptor:         pricingAdaptor,
+		RequestTime:            meta.StartTime,
 	})
 
 	quota := computeResult.TotalQuota
@@ -100,44 +102,50 @@ func postConsumeClaudeMessagesQuotaWithTraceID(ctx context.Context, requestId st
 
 	// Use centralized detailed billing function with explicit trace ID
 	quotaDelta := quota - preConsumedQuota - incrementalCharged
-	// If requestId somehow empty, try derive from ctx (best-effort)
-	var provisionalLogId int
-	if ginCtx, ok := gmw.GetGinCtxFromStdCtx(ctx); ok {
-		if requestId == "" {
-			requestId = ginCtx.GetString(ctxkey.RequestId)
-		}
-		provisionalLogId = ginCtx.GetInt(ctxkey.ProvisionalLogId)
+	// Resolve identifiers from the detached billing snapshot (or, for a synchronous
+	// caller, from the embedded gin context). NEVER read them off a live *gin.Context
+	// here: this runs inside a post-billing goroutine and gin recycles c.
+	billingID := billingIdentityFromContext(ctx)
+	provisionalLogId := billingID.provisionalLogID
+	if requestId == "" {
+		requestId = billingID.requestID
 	}
 	// For Claude models, upstream reports non-cached input tokens as PromptTokens
 	// and cached tokens separately. Sum them so the log shows the total prompt tokens.
 	logPromptTokens := computeResult.PromptTokens + computeResult.CachedPromptTokens
 
 	billing.PostConsumeQuotaDetailed(billing.QuotaConsumeDetail{
-		Ctx:                    ctx,
-		TokenId:                meta.TokenId,
-		QuotaDelta:             quotaDelta,
-		TotalQuota:             quota,
-		UserId:                 meta.UserId,
-		ChannelId:              meta.ChannelId,
-		PromptTokens:           logPromptTokens,
-		CompletionTokens:       computeResult.CompletionTokens,
-		ModelRatio:             computeResult.UsedModelRatio,
-		GroupRatio:             groupRatio,
-		ModelName:              request.Model,
-		TokenName:              meta.TokenName,
-		IsStream:               meta.IsStream,
-		StartTime:              meta.StartTime,
-		SystemPromptReset:      false,
-		CompletionRatio:        computeResult.UsedCompletionRatio,
-		ToolsCost:              usage.ToolsCost,
-		CachedPromptTokens:     computeResult.CachedPromptTokens,
-		CachedCompletionTokens: computeResult.CachedCompletionTokens,
-		CacheWrite5mTokens:     usage.CacheWrite5mTokens,
-		CacheWrite1hTokens:     usage.CacheWrite1hTokens,
-		Metadata:               metadata,
-		RequestId:              requestId,
-		TraceId:                traceId,
-		ProvisionalLogId:       provisionalLogId,
+		Ctx:                ctx,
+		TokenId:            meta.TokenId,
+		QuotaDelta:         quotaDelta,
+		TotalQuota:         quota,
+		UserId:             meta.UserId,
+		UserUUID:           meta.UserUUID,
+		ChannelId:          meta.ChannelId,
+		ChannelUUID:        meta.ChannelUUID,
+		PromptTokens:       logPromptTokens,
+		CompletionTokens:   computeResult.CompletionTokens,
+		ModelRatio:         computeResult.UsedModelRatio,
+		GroupRatio:         groupRatio,
+		OriginModelName:    meta.OriginModelName,
+		ModelName:          request.Model,
+		TokenUUID:          meta.TokenUUID,
+		TokenName:          meta.TokenName,
+		IsStream:           meta.IsStream,
+		StartTime:          meta.StartTime,
+		SystemPromptReset:  false,
+		CompletionRatio:    computeResult.UsedCompletionRatio,
+		ToolsCost:          usage.ToolsCost,
+		CachedPromptTokens: computeResult.CachedPromptTokens,
+		CacheWrite5mTokens: usage.CacheWrite5mTokens,
+		CacheWrite1hTokens: usage.CacheWrite1hTokens,
+		Metadata:           metadata,
+		RequestId:          requestId,
+		TraceId:            traceId,
+		ProvisionalLogId:   provisionalLogId,
+		UserAPIFormat:      resolveUserAPIFormat(meta.Mode),
+		UpstreamAPIFormat:  apitype.String(meta.APIType),
+		UpstreamEndpoint:   meta.UpstreamRequestURL,
 	})
 
 	// Log with context if available

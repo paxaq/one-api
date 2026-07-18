@@ -10,17 +10,20 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/common/tracing"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai"
-	"github.com/songquanpeng/one-api/relay/billing"
-	metalib "github.com/songquanpeng/one-api/relay/meta"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
-	"github.com/songquanpeng/one-api/relay/pricing"
-	quotautil "github.com/songquanpeng/one-api/relay/quota"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/adaptor/openai"
+	"github.com/Laisky/one-api/relay/apitype"
+	"github.com/Laisky/one-api/relay/billing"
+	metalib "github.com/Laisky/one-api/relay/meta"
+	relaymodel "github.com/Laisky/one-api/relay/model"
+	"github.com/Laisky/one-api/relay/pricing"
+	quotautil "github.com/Laisky/one-api/relay/quota"
 )
+
+// postConsumeResponseAPIQuotaDetailed lets tests capture the billing detail without DB writes.
+var postConsumeResponseAPIQuotaDetailed = billing.PostConsumeQuotaDetailed
 
 // preConsumeResponseAPIQuota pre-consumes quota for Response API requests
 func preConsumeResponseAPIQuota(
@@ -133,6 +136,7 @@ func postConsumeResponseAPIQuota(ctx context.Context,
 		ChannelModelConfigs:    channelModelConfigs,
 		ChannelCompletionRatio: channelCompletionRatio,
 		PricingAdaptor:         pricingAdaptor,
+		RequestTime:            meta.StartTime,
 	})
 
 	quota = computeResult.TotalQuota
@@ -152,55 +156,53 @@ func postConsumeResponseAPIQuota(ctx context.Context,
 	}
 	usedCompletionRatio := computeResult.UsedCompletionRatio
 	if usedCompletionRatio == 0 {
-		usedCompletionRatio = pricing.GetCompletionRatioWithThreeLayers(responseAPIRequest.Model, channelCompletionRatio, pricingAdaptor)
+		usedCompletionRatio = pricing.ResolveCompletionRatioAt(responseAPIRequest.Model, channelModelConfigs, channelCompletionRatio, pricingAdaptor, meta.StartTime)
 	}
 
-	// Derive RequestId/TraceId/ProvisionalLogId from std context if possible
-	var requestId string
-	var provisionalLogId int
-	if ginCtx, ok := gmw.GetGinCtxFromStdCtx(ctx); ok {
-		requestId = ginCtx.GetString(ctxkey.RequestId)
-		provisionalLogId = ginCtx.GetInt(ctxkey.ProvisionalLogId)
-	}
-	traceId := tracing.GetTraceIDFromContext(ctx)
+	// Resolve request-scoped identifiers from the detached billing snapshot (or, for a
+	// synchronous caller, from the embedded gin context). NEVER read them off a live
+	// *gin.Context here: this runs inside a post-billing goroutine and gin recycles c.
+	billingID := billingIdentityFromContext(ctx)
+	requestId := billingID.requestID
+	provisionalLogId := billingID.provisionalLogID
+	traceId := billingID.traceID
 	if meta.TokenId > 0 && meta.UserId > 0 && meta.ChannelId > 0 {
-		var toolSummary *model.ToolUsageSummary
-		if ginCtx, ok := gmw.GetGinCtxFromStdCtx(ctx); ok {
-			if raw, exists := ginCtx.Get(ctxkey.ToolInvocationSummary); exists {
-				if summary, ok := raw.(*model.ToolUsageSummary); ok {
-					toolSummary = summary
-				}
-			}
-		}
-		metadata := model.AppendToolUsageMetadata(nil, toolSummary)
-		metadata = model.AppendCacheWriteTokensMetadata(metadata, usage.CacheWrite5mTokens, usage.CacheWrite1hTokens)
+		toolSummary := billingID.toolSummary
+		metadata := model.AppendCacheWriteTokensMetadata(nil, usage.CacheWrite5mTokens, usage.CacheWrite1hTokens)
 
-		billing.PostConsumeQuotaDetailed(billing.QuotaConsumeDetail{
-			Ctx:                    ctx,
-			TokenId:                meta.TokenId,
-			QuotaDelta:             quotaDelta,
-			TotalQuota:             quota,
-			UserId:                 meta.UserId,
-			ChannelId:              meta.ChannelId,
-			PromptTokens:           promptTokens,
-			CompletionTokens:       completionTokens,
-			ModelRatio:             usedModelRatio,
-			GroupRatio:             groupRatio,
-			ModelName:              responseAPIRequest.Model,
-			TokenName:              meta.TokenName,
-			IsStream:               meta.IsStream,
-			StartTime:              meta.StartTime,
-			SystemPromptReset:      false,
-			CompletionRatio:        usedCompletionRatio,
-			ToolsCost:              usage.ToolsCost,
-			CachedPromptTokens:     cachedPrompt,
-			CachedCompletionTokens: 0,
-			CacheWrite5mTokens:     usage.CacheWrite5mTokens,
-			CacheWrite1hTokens:     usage.CacheWrite1hTokens,
-			Metadata:               metadata,
-			RequestId:              requestId,
-			TraceId:                traceId,
-			ProvisionalLogId:       provisionalLogId,
+		postConsumeResponseAPIQuotaDetailed(billing.QuotaConsumeDetail{
+			Ctx:                ctx,
+			TokenId:            meta.TokenId,
+			QuotaDelta:         quotaDelta,
+			TotalQuota:         quota,
+			UserId:             meta.UserId,
+			UserUUID:           meta.UserUUID,
+			ChannelId:          meta.ChannelId,
+			ChannelUUID:        meta.ChannelUUID,
+			PromptTokens:       promptTokens,
+			CompletionTokens:   completionTokens,
+			ModelRatio:         usedModelRatio,
+			GroupRatio:         groupRatio,
+			OriginModelName:    meta.OriginModelName,
+			ModelName:          responseAPIRequest.Model,
+			TokenUUID:          meta.TokenUUID,
+			TokenName:          meta.TokenName,
+			IsStream:           meta.IsStream,
+			StartTime:          meta.StartTime,
+			SystemPromptReset:  false,
+			CompletionRatio:    usedCompletionRatio,
+			ToolsCost:          usage.ToolsCost,
+			CachedPromptTokens: cachedPrompt,
+			CacheWrite5mTokens: usage.CacheWrite5mTokens,
+			CacheWrite1hTokens: usage.CacheWrite1hTokens,
+			Metadata:           metadata,
+			RequestId:          requestId,
+			TraceId:            traceId,
+			ProvisionalLogId:   provisionalLogId,
+			UserAPIFormat:      resolveUserAPIFormat(meta.Mode),
+			UpstreamAPIFormat:  apitype.String(meta.APIType),
+			UpstreamEndpoint:   meta.UpstreamRequestURL,
+			ToolUsageSummary:   toolSummary,
 		})
 	} else {
 		// Should not happen; log for investigation

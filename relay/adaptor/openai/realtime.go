@@ -15,14 +15,87 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 
-	rmeta "github.com/songquanpeng/one-api/relay/meta"
-	rmodel "github.com/songquanpeng/one-api/relay/model"
-	"github.com/songquanpeng/one-api/relay/relaymode"
+	rmeta "github.com/Laisky/one-api/relay/meta"
+	rmodel "github.com/Laisky/one-api/relay/model"
+	"github.com/Laisky/one-api/relay/relaymode"
 )
+
+// realtimeSessionsUpstreamURL returns the upstream URL for the realtime sessions
+// (ephemeral token) surface. A per-endpoint "realtime" URL override reroutes the
+// request to the override's scheme+host; the /v1/realtime/sessions path is
+// protocol-fixed and always preserved so token minting follows the same host as
+// the realtime WebSocket connection.
+func realtimeSessionsUpstreamURL(m *rmeta.Meta) string {
+	base := m.BaseURL
+	if base == "" {
+		base = "https://api.openai.com"
+	}
+	if override := m.UpstreamEndpointURLOverride(); override != "" {
+		if ou, err := url.Parse(override); err == nil && ou.Host != "" {
+			base = ou.Scheme + "://" + ou.Host
+		}
+	}
+	return strings.TrimRight(base, "/") + "/v1/realtime/sessions"
+}
+
+// realtimeWebSocketUpstreamURL returns the upstream WebSocket URL for the realtime
+// connect surface (/v1/realtime). A per-endpoint "realtime" URL override fully
+// specifies the upstream host and path (its scheme is normalized to ws/wss); when
+// absent, the channel BaseURL is used with the canonical /v1/realtime path. The
+// mapped model name is applied as the `model` query parameter while preserving
+// other client query parameters.
+func realtimeWebSocketUpstreamURL(m *rmeta.Meta, clientRawQuery string) string {
+	base := m.BaseURL
+	if base == "" {
+		base = "https://api.openai.com" // fallback
+	}
+	overridden := false
+	if override := m.UpstreamEndpointURLOverride(); override != "" {
+		base = override
+		overridden = true
+	}
+
+	u, err := url.Parse(base)
+	if err != nil || u == nil {
+		u = &url.URL{Scheme: "wss", Host: "api.openai.com"}
+	}
+
+	u.Scheme = strings.Replace(u.Scheme, "http", "ws", 1) // http->ws, https->wss
+	switch u.Scheme {
+	case "", "http":
+		u.Scheme = "wss"
+	case "https":
+		u.Scheme = "wss"
+	}
+
+	// Without an override, always use the canonical realtime path. With an
+	// override, respect the path it carries, falling back to the canonical path
+	// when the override omits one.
+	if !overridden || u.Path == "" || u.Path == "/" {
+		u.Path = "/v1/realtime"
+	}
+
+	q, _ := url.ParseQuery(clientRawQuery)
+	if m.ActualModelName != "" {
+		q.Set("model", m.ActualModelName)
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
 
 // RealtimeSessionsHandler proxies a POST request to the upstream OpenAI
 // Realtime Sessions endpoint (/v1/realtime/sessions) which creates ephemeral
 // tokens for WebRTC browser clients.
+//
+// Security: the body's `model` field is enforced against `meta.ActualModelName`
+// before forwarding. If the client requests a model that does not match the
+// channel-bound model (and is not the channel's user-facing alias), the
+// handler returns 400 WITHOUT calling upstream. This prevents a billing-bypass
+// vector where a cheap channel mints an ephemeral token for an expensive
+// model and the token is then used over WebRTC (which the proxy cannot meter).
+//
+// When the proxy could not resolve a bound model (legacy path, empty
+// ActualModelName) enforcement is skipped and the body is forwarded as-is.
 func RealtimeSessionsHandler(c *gin.Context, meta *rmeta.Meta) (*rmodel.ErrorWithStatusCode, error) {
 	// Read the incoming request body
 	body, err := io.ReadAll(c.Request.Body)
@@ -33,12 +106,13 @@ func RealtimeSessionsHandler(c *gin.Context, meta *rmeta.Meta) (*rmodel.ErrorWit
 		}, errors.Wrap(err, "read request body")
 	}
 
-	// Build upstream URL
-	base := meta.BaseURL
-	if base == "" {
-		base = "https://api.openai.com"
+	body, bizErr := enforceRealtimeSessionsBodyModel(body, meta)
+	if bizErr != nil {
+		return bizErr, bizErr.Error.RawError
 	}
-	upstreamURL := strings.TrimRight(base, "/") + "/v1/realtime/sessions"
+
+	// Build upstream URL (honoring any per-endpoint "realtime" override)
+	upstreamURL := realtimeSessionsUpstreamURL(meta)
 
 	// Create upstream request
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, upstreamURL, bytes.NewReader(body))
@@ -123,30 +197,9 @@ func RealtimeHandler(c *gin.Context, meta *rmeta.Meta) (*rmodel.ErrorWithStatusC
 	// Ensure close on exit
 	defer func() { _ = clientConn.Close() }()
 
-	// Build upstream URL
-	base := meta.BaseURL
-	if base == "" {
-		base = "https://api.openai.com" // fallback
-	}
-	// Preserve query but ensure model uses mapped ActualModelName
-	rawQuery := c.Request.URL.RawQuery
-	u, _ := url.Parse(base)
-
-	u.Scheme = strings.Replace(u.Scheme, "http", "ws", 1) // http->ws, https->wss
-	switch u.Scheme {
-	case "", "http":
-		u.Scheme = "wss"
-	case "https":
-		u.Scheme = "wss"
-	}
-
-	u.Path = "/v1/realtime"
-	// Override model query with mapped model if provided
-	q, _ := url.ParseQuery(rawQuery)
-	if meta.ActualModelName != "" {
-		q.Set("model", meta.ActualModelName)
-	}
-	u.RawQuery = q.Encode()
+	// Build upstream URL (honoring any per-endpoint "realtime" override).
+	// Preserves client query while forcing the mapped model name.
+	wsURL := realtimeWebSocketUpstreamURL(meta, c.Request.URL.RawQuery)
 
 	// Prepare headers and subprotocols
 	requestHeader := http.Header{}
@@ -162,7 +215,7 @@ func RealtimeHandler(c *gin.Context, meta *rmeta.Meta) (*rmodel.ErrorWithStatusC
 	requestHeader.Set("Authorization", "Bearer "+meta.APIKey)
 
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second, Proxy: http.ProxyFromEnvironment}
-	upstreamConn, _, derr := dialer.Dial(u.String(), requestHeader)
+	upstreamConn, _, derr := dialer.Dial(wsURL, requestHeader)
 	if derr != nil {
 		_ = clientConn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, "upstream connect failed"))
 		return &rmodel.ErrorWithStatusCode{
@@ -177,7 +230,7 @@ func RealtimeHandler(c *gin.Context, meta *rmeta.Meta) (*rmodel.ErrorWithStatusC
 	usage := &rmodel.Usage{}
 	countedResponseIDs := map[string]struct{}{}
 	go func() { errc <- copyWSUpstreamToClient(upstreamConn, clientConn, usage, countedResponseIDs) }()
-	go func() { errc <- copyWS(clientConn, upstreamConn) }()
+	go func() { errc <- copyRealtimeClientToUpstream(clientConn, upstreamConn) }()
 
 	// Wait for one direction to finish, then close both connections
 	// to unblock the other goroutine.
@@ -198,6 +251,54 @@ func RealtimeHandler(c *gin.Context, meta *rmeta.Meta) (*rmodel.ErrorWithStatusC
 	}
 
 	return nil, usage
+}
+
+// copyRealtimeClientToUpstream forwards client frames to the upstream realtime
+// connection while rejecting `session.update` events that attempt to change
+// the session model. OpenAI's Realtime API itself rejects model changes, but
+// defense-in-depth keeps the proxy authoritative against non-conformant
+// upstreams and prevents the proxy from forwarding billing-ambiguous frames.
+//
+// Parameters:
+//   - src: client WebSocket connection (reader).
+//   - dst: upstream realtime WebSocket connection (writer).
+//
+// Returns:
+//   - error: nil on clean close; ErrModelSwitchDenied (wrapped) when a client
+//     attempts to mutate `session.model`; other errors propagate I/O failures.
+func copyRealtimeClientToUpstream(src, dst *websocket.Conn) error {
+	for {
+		mt, msg, err := src.ReadMessage()
+		if err != nil {
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) {
+				_ = dst.WriteControl(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(closeErr.Code, closeErr.Text),
+					time.Now().Add(time.Second),
+				)
+				return nil
+			}
+			return errors.WithStack(err)
+		}
+
+		if mt == websocket.TextMessage {
+			if _, guardErr := enforceRealtimeSessionUpdate(msg); guardErr != nil {
+				errEvent := buildModelSwitchErrorEvent(guardErr.Error())
+				_ = src.WriteMessage(websocket.TextMessage, errEvent)
+				_ = src.WriteControl(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "model_switch_denied"),
+					time.Now().Add(time.Second),
+				)
+				return errors.WithStack(guardErr)
+			}
+		}
+
+		if werr := dst.WriteMessage(mt, msg); werr != nil {
+			return errors.WithStack(werr)
+		}
+	}
 }
 
 func copyWS(src, dst *websocket.Conn) error {

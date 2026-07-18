@@ -13,11 +13,11 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
-	"github.com/songquanpeng/one-api/common/client"
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/image"
-	netutil "github.com/songquanpeng/one-api/common/network"
-	"github.com/songquanpeng/one-api/relay/model"
+	"github.com/Laisky/one-api/common/client"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/image"
+	netutil "github.com/Laisky/one-api/common/network"
+	"github.com/Laisky/one-api/relay/model"
 )
 
 // DownloadImageFromURL downloads an image from a URL and returns the image data and format
@@ -140,7 +140,7 @@ func downloadImageFromHTTPURL(ctx context.Context, imageURL string) ([]byte, typ
 	contentType := resp.Header.Get("Content-Type")
 	format, err := detectImageFormat(contentType, imageURL)
 	if err != nil {
-		return nil, "", err
+		return nil, "", errors.Wrap(err, "detect image format")
 	}
 
 	// Read image data with size limit using configurable MaxInlineImageSizeMB
@@ -457,6 +457,10 @@ func getAWSModelID(requestModel string) (string, error) {
 		return "anthropic.claude-3-5-sonnet-20241022-v2:0", nil
 	case "claude-3-5-haiku-20241022":
 		return "anthropic.claude-3-5-haiku-20241022-v1:0", nil
+	case "claude-fable-5":
+		return "anthropic.claude-fable-5", nil
+	case "claude-sonnet-5":
+		return "anthropic.claude-sonnet-5", nil
 
 	// Llama models
 	case "llama3-1-8b-128k":

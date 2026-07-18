@@ -11,10 +11,10 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	dbmodel "github.com/songquanpeng/one-api/model"
-	metalib "github.com/songquanpeng/one-api/relay/meta"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
+	"github.com/Laisky/one-api/common/ctxkey"
+	dbmodel "github.com/Laisky/one-api/model"
+	metalib "github.com/Laisky/one-api/relay/meta"
+	relaymodel "github.com/Laisky/one-api/relay/model"
 )
 
 const maxLoggedVideoBytes = 64 * 1024
@@ -128,8 +128,11 @@ func persistAsyncVideoTask(c *gin.Context, body []byte) {
 		TaskID:        taskID,
 		TaskType:      videoTaskType,
 		UserID:        metaInfo.UserId,
+		UserUUID:      dbmodel.StringPtrIfNotEmpty(metaInfo.UserUUID),
 		TokenID:       metaInfo.TokenId,
+		TokenUUID:     dbmodel.StringPtrIfNotEmpty(metaInfo.TokenUUID),
 		ChannelID:     metaInfo.ChannelId,
+		ChannelUUID:   dbmodel.StringPtrIfNotEmpty(metaInfo.ChannelUUID),
 		ChannelType:   metaInfo.ChannelType,
 		OriginModel:   metaInfo.OriginModelName,
 		ActualModel:   metaInfo.ActualModelName,

@@ -55,5 +55,8 @@ const (
 	GeminiOpenAICompatible
 	ClaudeCompatible
 	Copilot
+	Fireworks
+	NVIDIA
+	Cerebras
 	Dummy
 )

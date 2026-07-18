@@ -3,9 +3,9 @@ package router
 import (
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/graceful"
-	"github.com/songquanpeng/one-api/controller"
-	"github.com/songquanpeng/one-api/middleware"
+	"github.com/Laisky/one-api/common/graceful"
+	"github.com/Laisky/one-api/controller"
+	"github.com/Laisky/one-api/middleware"
 )
 
 func SetRelayRouter(router *gin.Engine) {
@@ -24,6 +24,16 @@ func SetRelayRouter(router *gin.Engine) {
 	router.Use(middleware.APIFormatAutoDetect(router))
 	router.Use(middleware.CORS())
 	router.Use(middleware.GzipDecodeMiddleware())
+
+	// OpenRouter provider listing endpoint. Public (no auth) since OpenRouter
+	// scrapes this during onboarding and periodic refresh. Returns the model
+	// catalog in the OpenRouter upstream-provider schema described at
+	// https://openrouter.ai/docs/guides/get-started/for-providers.
+	openRouterRouter := router.Group("/openrouter/v1")
+	{
+		openRouterRouter.GET("/models", controller.OpenRouterListModels)
+	}
+
 	// https://platform.openai.com/docs/api-reference/introduction
 	modelsRouter := router.Group("/v1/models")
 	modelsRouter.Use(middleware.TokenAuth())
@@ -32,7 +42,10 @@ func SetRelayRouter(router *gin.Engine) {
 		modelsRouter.GET("/:model", controller.RetrieveModel)
 	}
 
-	router.POST("/mcp", middleware.TokenAuth(), controller.MCPProxy)
+	// MCP Streamable HTTP transport: a single endpoint serves POST (JSON-RPC
+	// requests/notifications), GET (optional server-initiated SSE), and
+	// DELETE (session termination). The handler dispatches by method.
+	router.Any("/mcp", middleware.TokenAuth(), controller.MCPProxy)
 
 	relayMws := []gin.HandlerFunc{
 		// Track in-flight requests for graceful shutdown/drain
@@ -41,6 +54,7 @@ func SetRelayRouter(router *gin.Engine) {
 		middleware.BindAsyncTaskChannel(),
 		middleware.Distribute(),
 		middleware.GlobalRelayRateLimit(),
+		middleware.LowBalanceRelayRateLimit(),
 		middleware.ChannelRateLimit(),
 	}
 

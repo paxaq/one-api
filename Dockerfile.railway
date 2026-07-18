@@ -2,7 +2,7 @@
 # Railway compatible Dockerfile for one-api
 
 ARG NODE_IMAGE=node:24-bookworm
-ARG GO_IMAGE=golang:1.25-bookworm
+ARG GO_IMAGE=golang:1.26.3-bookworm
 
 #############################
 # Stage 1: Frontend build   #

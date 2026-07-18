@@ -51,7 +51,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/songquanpeng/one-api/common/env"
+	"github.com/Laisky/one-api/common/env"
 )
 
 // =============================================================================
@@ -160,12 +160,20 @@ var (
 	CookieMaxAgeHours = env.Int("COOKIE_MAXAGE_HOURS", 168)
 
 	// EnableCookieSecure forces the browser to send session cookies only over
-	// HTTPS when set to true. Enable this in production with HTTPS termination.
+	// HTTPS. Defaults to `true` because that is what production deployments
+	// must use — without it, Safari/iOS Chrome may evict the cookie under ITP
+	// while `localStorage` survives, producing repeated logout/redirect cycles
+	// on mobile even when the site is served over HTTPS.
+	//
+	// Local HTTP development should explicitly set ENABLE_COOKIE_SECURE=false.
+	// Tying the flag to DEBUG was considered and rejected: operators sometimes
+	// enable DEBUG in production for log verbosity during incident response,
+	// and the cookie posture must not change in that case.
 	//
 	// Environment variable: ENABLE_COOKIE_SECURE
-	// Default: false
+	// Default: true
 	// Allowed values: true, false
-	EnableCookieSecure = env.Bool("ENABLE_COOKIE_SECURE", false)
+	EnableCookieSecure = env.Bool("ENABLE_COOKIE_SECURE", true)
 )
 
 // =============================================================================
@@ -222,9 +230,11 @@ var (
 	// during concurrent access. Higher values reduce lock errors but increase latency.
 	//
 	// Environment variable: SQLITE_BUSY_TIMEOUT
-	// Default: 3000 (3 seconds)
+	// Default: 10000 (10 seconds) — long enough to absorb write bursts without
+	// surfacing transient lock errors; pairs with WAL journaling and the
+	// sqlite_retry helper for production-grade resilience.
 	// Unit: milliseconds
-	SQLiteBusyTimeout = env.Int("SQLITE_BUSY_TIMEOUT", 3000)
+	SQLiteBusyTimeout = env.Int("SQLITE_BUSY_TIMEOUT", 10000)
 
 	// SQLMaxIdleConns controls the primary database pool's idle connection count.
 	// Set based on expected concurrent connections and database server capacity.
@@ -447,6 +457,17 @@ var (
 // Rate limits use sliding window counters in Redis (or memory if Redis unavailable).
 
 var (
+	// RateLimitDisabled turns off ALL rate limiting (global web/API/relay,
+	// critical, upload/download, per-channel, low-balance relay, and TOTP) when
+	// RATE_LIMIT_DISABLED=true. This is a behavioral toggle intended for local
+	// development and tests; it is deliberately independent of DEBUG so that
+	// DEBUG only affects logging and never changes runtime behavior.
+	//
+	// Environment variable: RATE_LIMIT_DISABLED
+	// Default: false
+	// WARNING: never enable in production; it removes all abuse protection.
+	RateLimitDisabled = env.Bool("RATE_LIMIT_DISABLED", false)
+
 	// GlobalApiRateLimitNum bounds the number of REST API requests per IP
 	// within the GlobalApiRateLimitDuration window.
 	//
@@ -487,6 +508,37 @@ var (
 	// Unit: seconds
 	GlobalRelayRateLimitDuration int64 = 3 * 60
 
+	// LowBalanceThreshold is the account balance, in USD, below which a stricter
+	// relay rate limit is applied. It targets free users who never top up but keep
+	// hammering free models. Users whose balance is at or above this value keep the
+	// standard GlobalRelayRateLimitNum limit.
+	//
+	// Environment variable: LOW_BALANCE_RATE_LIMIT_THRESHOLD
+	// Default: 0.5 (USD)
+	LowBalanceThreshold = env.Float64("LOW_BALANCE_RATE_LIMIT_THRESHOLD", 0.5)
+
+	// LowBalanceRelayRateLimitNum bounds the number of relay API calls allowed for a
+	// low-balance user (balance below LowBalanceThreshold) within
+	// LowBalanceRelayRateLimitDuration. It defaults to GlobalRelayRateLimitNum so the
+	// out-of-the-box behavior is identical to the standard relay limit; operators
+	// lower it (or lengthen the window) to throttle users who have not topped up.
+	// The limiter engages only when its effective rate (this count divided by
+	// LowBalanceRelayRateLimitDuration) is stricter than the global relay rate;
+	// otherwise it stays a transparent no-op.
+	//
+	// Environment variable: LOW_BALANCE_RELAY_RATE_LIMIT
+	// Default: same as GlobalRelayRateLimitNum
+	LowBalanceRelayRateLimitNum = env.Int("LOW_BALANCE_RELAY_RATE_LIMIT", GlobalRelayRateLimitNum)
+
+	// LowBalanceRelayRateLimitDuration sets the window for the low-balance relay limit.
+	// Together with LowBalanceRelayRateLimitNum it defines the effective rate compared
+	// against the global relay rate to decide whether the low-balance limiter engages.
+	//
+	// Environment variable: LOW_BALANCE_RELAY_RATE_LIMIT_DURATION
+	// Default: same as GlobalRelayRateLimitDuration
+	// Unit: seconds
+	LowBalanceRelayRateLimitDuration = int64(env.Int("LOW_BALANCE_RELAY_RATE_LIMIT_DURATION", int(GlobalRelayRateLimitDuration)))
+
 	// ChannelRateLimitEnabled toggles per-channel rate limiting when true.
 	// When enabled, each channel has its own request limit defined in channel settings.
 	//
@@ -512,6 +564,23 @@ var (
 	// Default: 1200 seconds (20 minutes)
 	// Unit: seconds
 	CriticalRateLimitDuration int64 = 20 * 60
+
+	// RedeemFailureRateLimitNum bounds the number of FAILED redemption attempts a
+	// single authenticated user may make within RedeemFailureRateLimitDuration
+	// before further attempts are rejected with HTTP 429. This throttles
+	// enumeration/brute-force of redemption codes from a logged-in account.
+	// Successful redemptions never count toward this limit, so a legitimate user
+	// is unaffected. Set to 0 to disable.
+	//
+	// Environment variable: REDEEM_FAILURE_RATE_LIMIT
+	// Default: 5 failed attempts per 5 minutes
+	RedeemFailureRateLimitNum = env.Int("REDEEM_FAILURE_RATE_LIMIT", 5)
+
+	// RedeemFailureRateLimitDuration sets the window for redeem-failure rate limiting.
+	//
+	// Default: 600 seconds (10 minutes)
+	// Unit: seconds
+	RedeemFailureRateLimitDuration int64 = 10 * 60
 
 	// UploadRateLimitNum bounds the number of file uploads allowed per client
 	// within UploadRateLimitDuration.
@@ -757,6 +826,26 @@ var (
 	// Environment variable: METRICS_TOKEN
 	// Default: "" (metrics endpoint blocked)
 	MetricsToken = strings.TrimSpace(env.String("METRICS_TOKEN", ""))
+
+	// EnablePprof exposes the Go net/http/pprof profiling endpoints on a
+	// dedicated listener (see PprofListen) when true. Use it to debug live
+	// memory/CPU/goroutine usage with `go tool pprof`. Disabled by default
+	// because the profiling surface can leak internal data and add load.
+	//
+	// Environment variable: ENABLE_PPROF
+	// Default: false
+	EnablePprof = env.Bool("ENABLE_PPROF", false)
+
+	// PprofListen is the bind address for the pprof listener. It defaults to
+	// loopback so the profiling endpoints are only reachable locally (e.g. via
+	// an SSH tunnel: `ssh -L 6060:localhost:6060 <host>`). Bind it to a
+	// non-loopback address only behind a firewall/auth proxy, since pprof has
+	// no built-in authentication.
+	//
+	// Environment variable: PPROF_LISTEN
+	// Default: "localhost:6060"
+	// Example: "0.0.0.0:6060"
+	PprofListen = strings.TrimSpace(env.String("PPROF_LISTEN", "localhost:6060"))
 
 	// MetricQueueSize configures the buffered queue that aggregates success/failure
 	// events before processing. Larger queues handle burst traffic better.
@@ -1602,6 +1691,17 @@ func init() {
 
 	// Enable consumption logging by default
 	logConsumeEnabled.Store(true)
+
+	// Load the external UUID backfill settings. These are parsed strictly rather
+	// than through the silently-defaulting env helpers, so an out-of-range or
+	// unparseable value fails configuration loading instead of starting the
+	// backfill worker on an unintended budget or timeout.
+	MustLoadExternalUUIDBackfillSettings()
+
+	// Load the compact UUID storage settings under the same strict contract, so an
+	// invalid budget, interval, or timeout fails startup before the compact
+	// migration worker is created rather than after it has begun DDL.
+	MustLoadCompactUUIDSettings()
 
 	// Validate all environment variables with constraints
 	// This will panic if any validation fails, ensuring fast failure on misconfiguration

@@ -14,7 +14,15 @@ import { ChannelModelSettings } from '../ChannelModelSettings';
  * @param defaultValue - fallback string to render.
  * @returns The fallback translation value.
  */
-const tr = (_key: string, defaultValue: string) => defaultValue;
+const tr = (_key: string, defaultValue: string, options?: Record<string, unknown>) => {
+  let value = defaultValue;
+  if (options) {
+    for (const [optionKey, optionValue] of Object.entries(options)) {
+      value = value.replace(`{{${optionKey}}}`, String(optionValue));
+    }
+  }
+  return value;
+};
 
 const baseDefaults: ChannelForm = {
   name: 'Test Channel',
@@ -23,6 +31,7 @@ const baseDefaults: ChannelForm = {
   base_url: '',
   other: '',
   models: [],
+  hidden_models: [],
   model_mapping: '',
   model_configs: '',
   tooling: '',
@@ -42,6 +51,7 @@ const baseDefaults: ChannelForm = {
     api_format: 'chat_completion',
     supported_endpoints: [],
     mcp_tool_blacklist: [],
+    custom_headers: {},
   },
   inference_profile_arn_map: '',
 };
@@ -52,6 +62,9 @@ const baseDefaults: ChannelForm = {
 interface TestHarnessProps {
   defaultPricing: string;
   onReady: (form: UseFormReturn<ChannelForm>) => void;
+  defaultValues?: Partial<ChannelForm>;
+  availableModels?: { id: string; name: string }[];
+  currentCatalogModels?: string[];
 }
 
 /**
@@ -60,8 +73,17 @@ interface TestHarnessProps {
  * @param onReady - callback to expose the form instance.
  * @returns The rendered ChannelModelSettings component.
  */
-const TestHarness = ({ defaultPricing, onReady }: TestHarnessProps) => {
-  const form = useForm<ChannelForm>({ defaultValues: baseDefaults });
+const TestHarness = ({ defaultPricing, onReady, defaultValues, availableModels = [], currentCatalogModels = [] }: TestHarnessProps) => {
+  const form = useForm<ChannelForm>({
+    defaultValues: {
+      ...baseDefaults,
+      ...defaultValues,
+      config: {
+        ...baseDefaults.config,
+        ...(defaultValues?.config || {}),
+      },
+    },
+  });
 
   useEffect(() => {
     onReady(form);
@@ -71,8 +93,8 @@ const TestHarness = ({ defaultPricing, onReady }: TestHarnessProps) => {
     <TooltipProvider>
       <ChannelModelSettings
         form={form}
-        availableModels={[]}
-        currentCatalogModels={[]}
+        availableModels={availableModels}
+        currentCatalogModels={currentCatalogModels}
         defaultPricing={defaultPricing}
         tr={tr}
         notify={vi.fn()}
@@ -99,5 +121,163 @@ describe('ChannelModelSettings', () => {
     await user.click(button);
 
     expect(formRef?.getValues('model_configs')).toBe('{"gpt-4": {"ratio": 1}}');
+  });
+
+  it('shows non-blocking hidden-model warnings', () => {
+    render(
+      <TestHarness
+        defaultPricing=""
+        onReady={() => {}}
+        defaultValues={{
+          models: ['public-alias'],
+          hidden_models: ['missing-model', 'public-alias'],
+          model_mapping: '{"public-alias":"hidden-upstream"}',
+        }}
+        availableModels={[
+          { id: 'public-alias', name: 'public-alias' },
+          { id: 'missing-model', name: 'missing-model' },
+        ]}
+        currentCatalogModels={['public-alias']}
+      />
+    );
+
+    expect(screen.getByText('These hidden models are not currently supported by the channel: missing-model')).toBeInTheDocument();
+    expect(
+      screen.getByText('These hidden models are used as Model Mapping sources, so the public aliases will become unreachable: public-alias')
+    ).toBeInTheDocument();
+  });
+
+  it('warns when Model Mapping keys are not listed in Supported Models', () => {
+    render(
+      <TestHarness
+        defaultPricing=""
+        onReady={() => {}}
+        defaultValues={{
+          models: ['public-alias'],
+          model_mapping: '{"ghost-alias":"gpt-4o","public-alias":"gpt-4o"}',
+        }}
+        availableModels={[{ id: 'public-alias', name: 'public-alias' }]}
+        currentCatalogModels={['public-alias']}
+      />
+    );
+
+    expect(
+      screen.getByText('These mapping keys are not in Supported Models, so requests to these aliases will be rejected: ghost-alias')
+    ).toBeInTheDocument();
+  });
+
+  it('flags invalid Model Mapping JSON with a destructive banner', () => {
+    render(
+      <TestHarness
+        defaultPricing=""
+        onReady={() => {}}
+        defaultValues={{
+          models: ['public-alias'],
+          model_mapping: '{"oops":',
+        }}
+        availableModels={[{ id: 'public-alias', name: 'public-alias' }]}
+      />
+    );
+
+    expect(screen.getByText(/Model Mapping JSON is invalid:/)).toBeInTheDocument();
+    // Ensure the "unreachable keys" warning is suppressed while JSON is broken.
+    expect(screen.queryByText(/are not in Supported Models/)).not.toBeInTheDocument();
+  });
+
+  it('flags non-object Model Mapping JSON', () => {
+    render(
+      <TestHarness
+        defaultPricing=""
+        onReady={() => {}}
+        defaultValues={{
+          models: ['public-alias'],
+          model_mapping: '["not","an","object"]',
+        }}
+        availableModels={[{ id: 'public-alias', name: 'public-alias' }]}
+      />
+    );
+
+    expect(screen.getByText('Model Mapping must be a JSON object of the form { "from": "to" }.')).toBeInTheDocument();
+  });
+
+  it('flags empty or non-string Model Mapping values as destructive errors', () => {
+    render(
+      <TestHarness
+        defaultPricing=""
+        onReady={() => {}}
+        defaultValues={{
+          models: ['public-alias'],
+          model_mapping: '{"public-alias":"","typo": 7}',
+        }}
+        availableModels={[{ id: 'public-alias', name: 'public-alias' }]}
+      />
+    );
+
+    expect(screen.getByText('These Model Mapping entries have empty or non-string values: public-alias, typo')).toBeInTheDocument();
+    expect(screen.queryByText(/are not in Supported Models/)).not.toBeInTheDocument();
+  });
+
+  it('warns when Model Mapping targets are not recognized by the channel', () => {
+    render(
+      <TestHarness
+        defaultPricing=""
+        onReady={() => {}}
+        defaultValues={{
+          models: ['public-alias'],
+          model_mapping: '{"public-alias":"ghost-upstream"}',
+        }}
+        availableModels={[
+          { id: 'public-alias', name: 'public-alias' },
+          { id: 'gpt-4o', name: 'gpt-4o' },
+        ]}
+      />
+    );
+
+    expect(
+      screen.getByText('These mapping targets are not recognized as models for this channel: public-alias → ghost-upstream')
+    ).toBeInTheDocument();
+  });
+
+  it('does not warn when all Model Mapping keys are in Supported Models', () => {
+    render(
+      <TestHarness
+        defaultPricing=""
+        onReady={() => {}}
+        defaultValues={{
+          models: ['public-alias'],
+          model_mapping: '{"public-alias":"gpt-4o"}',
+        }}
+        availableModels={[{ id: 'public-alias', name: 'public-alias' }]}
+        currentCatalogModels={['public-alias']}
+      />
+    );
+
+    expect(screen.queryByText(/are not in Supported Models/)).not.toBeInTheDocument();
+  });
+
+  it('validates Model Mapping source and target casing exactly while keeping hidden-model support folded', () => {
+    render(
+      <TestHarness
+        defaultPricing=""
+        onReady={() => {}}
+        defaultValues={{
+          models: ['Public-Alias'],
+          hidden_models: ['public-alias'],
+          model_mapping: '{"public-alias":"gpt-4o"}',
+        }}
+        availableModels={[
+          { id: 'Public-Alias', name: 'Public-Alias' },
+          { id: 'GPT-4o', name: 'GPT-4o' },
+        ]}
+      />
+    );
+
+    expect(screen.queryByText(/hidden models are not currently supported/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText('These mapping keys are not in Supported Models, so requests to these aliases will be rejected: public-alias')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('These mapping targets are not recognized as models for this channel: public-alias → gpt-4o')
+    ).toBeInTheDocument();
   });
 });

@@ -21,10 +21,31 @@
       "top_up_link": "Top-up Link",
       "top_up_link_desc": "External link for users to purchase or top up quota."
     },
+    "group_ratio": {
+      "description": "Configure billing multipliers per channel group. Add a new group simply by adding an entry here.",
+      "fix_errors_first": "Please fix the JSON errors before saving.",
+      "format": "Format JSON",
+      "help": "JSON object whose keys are group names and values are multipliers applied to the base price (e.g. vip: 0.8 means 20% off).",
+      "invalid_entries": "These group entries must use a number ≥ 0 and a non-empty key: {{keys}}",
+      "invalid_json": "JSON parse error: {{message}}",
+      "label": "Group Ratio (JSON)",
+      "save": "Save Group Ratio",
+      "save_failed": "Failed to save group ratio",
+      "saved_message": "Group ratio updated.",
+      "saved_success": "Saved",
+      "saving": "Saving...",
+      "shape_invalid": "Group Ratio must be a JSON object of the form { \"groupName\": ratio }.",
+      "title": "Groups \u0026 Ratios",
+      "unsaved": "Unsaved changes"
+    },
     "loading": "Loading operation settings...",
     "logs": {
       "clear_button": "Clear Logs Before This Date",
       "clear_failed": "Failed to clear logs: {{message}}",
+      "clear_failed_message": "Failed to clear logs.",
+      "clear_failed_title": "Clear failed",
+      "clear_success_message": "Historical logs cleared.",
+      "clear_success_title": "Logs cleared",
       "clear_warning": "This will permanently delete all logs before the selected date.",
       "cleared_success": "Cleared {{count}} logs!",
       "description": "Clear historical logs to free up storage space",
@@ -55,7 +76,11 @@
       "quota_for_new_user_desc": "Initial quota granted to each newly registered user.",
       "save": "Save Quota Settings",
       "title": "Quota Settings"
-    }
+    },
+    "save_failed_generic": "Failed to save setting.",
+    "save_failed_title": "Save failed",
+    "save_success_message": "Changes saved successfully.",
+    "save_success_title": "Settings saved"
   },
   "other_settings": {
     "branding": {
@@ -90,6 +115,10 @@
       "title": "Content Management"
     },
     "loading": "Loading other settings...",
+    "save_failed_message": "Failed to save setting.",
+    "save_failed_title": "Save failed",
+    "save_success_message": "Setting saved successfully.",
+    "save_success_title": "Saved",
     "updates": {
       "check_update": "Check for Updates",
       "description": "Check for updates and manage system version",
@@ -101,9 +130,28 @@
   "personal_settings": {
     "access_token": {
       "description": "Generate access tokens and invitation links.",
+      "generate_failed": "Failed to generate access token.",
       "generate_token": "Generate Access Token",
       "get_invite_link": "Get Invitation Link",
+      "invite_failed": "Failed to get invite link.",
       "title": "Access Token \u0026 Invitation"
+    },
+    "oauth_binding": {
+      "bind_failed": "Failed to start binding flow",
+      "bind_lark": "Bind Lark",
+      "bind_oidc": "Bind OIDC",
+      "binding": "Binding...",
+      "bound_lark": "Lark account bound",
+      "bound_oidc": "OIDC account bound",
+      "description": "Link third-party identity providers to your account for one-click sign-in.",
+      "lark_label": "Lark",
+      "not_bound": "Not bound",
+      "oidc_label": "OIDC",
+      "title": "Account Bindings",
+      "unbind_failed": "Failed to unbind account",
+      "unbind_lark": "Unbind Lark",
+      "unbind_oidc": "Unbind OIDC",
+      "unbind_success": "Account unbound successfully"
     },
     "passkey": {
       "delete_button": "Delete",
@@ -142,6 +190,7 @@
       "email": "Email",
       "email_help": "Changing email requires verification. Send a code to the new address and confirm it below.",
       "email_placeholder": "Enter email",
+      "email_required": "Valid email is required",
       "email_verification_code_placeholder": "Enter email verification code",
       "failed": "Update failed",
       "load_failed": "Failed to load profile information",
@@ -152,7 +201,8 @@
       "title": "Profile Information",
       "update_button": "Update Profile",
       "updating": "Updating...",
-      "username": "Username"
+      "username": "Username",
+      "username_required": "Username is required"
     },
     "security": {
       "description": "Manage how you sign in and protect your account.",
@@ -200,6 +250,8 @@
         "setup_failed": "Failed to setup TOTP"
       },
       "processing": "Processing...",
+      "qr_alt": "TOTP QR Code",
+      "qr_caption": "Two-Factor Authentication",
       "secret_key": "Secret Key (manual entry)",
       "setup_desc": "Follow these steps to secure your account with TOTP.",
       "setup_instructions_title": "Setup Instructions",
@@ -292,6 +344,17 @@
       "resend": "Resend (HTTP API)",
       "smtp": "SMTP"
     },
+    "email_whitelist": {
+      "add": "Add",
+      "duplicate_domain": "Domain \"{{domain}}\" is already in the list.",
+      "duplicate_title": "Duplicate domain",
+      "empty": "No domains added yet.",
+      "input_aria": "New email domain",
+      "invalid_domain": "\"{{domain}}\" is not a valid domain.",
+      "invalid_title": "Invalid domain",
+      "placeholder": "e.g. example.com",
+      "remove_aria": "Remove {{domain}}"
+    },
     "enabled": "Enabled",
     "groups": {
       "authentication": {
@@ -339,6 +402,14 @@
     "loading": "Loading options...",
     "no_description": "No description available for this setting yet.",
     "no_options": "No options available or insufficient permissions.",
+    "oidc_discovery": {
+      "button": "Fetch endpoints",
+      "failed_title": "OIDC discovery failed",
+      "invalid_url": "OidcWellKnown must be a valid http(s) URL before discovery.",
+      "missing_endpoints": "Discovery document is missing: {{endpoints}}",
+      "success_message": "Authorization, token, and userinfo endpoints have been saved.",
+      "success_title": "OIDC endpoints updated"
+    },
     "option_value_aria": "{{key}} value",
     "refresh": "Refresh",
     "save": "Save",

@@ -10,24 +10,23 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/common/tracing"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/adaptor/gemini"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai"
-	vertexaiadaptor "github.com/songquanpeng/one-api/relay/adaptor/vertexai"
-	"github.com/songquanpeng/one-api/relay/apitype"
-	"github.com/songquanpeng/one-api/relay/billing"
-	"github.com/songquanpeng/one-api/relay/billing/ratio"
-	"github.com/songquanpeng/one-api/relay/channeltype"
-	"github.com/songquanpeng/one-api/relay/constant/role"
-	"github.com/songquanpeng/one-api/relay/controller/validator"
-	"github.com/songquanpeng/one-api/relay/meta"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
-	quotautil "github.com/songquanpeng/one-api/relay/quota"
-	"github.com/songquanpeng/one-api/relay/relaymode"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/adaptor/gemini"
+	"github.com/Laisky/one-api/relay/adaptor/openai"
+	vertexaiadaptor "github.com/Laisky/one-api/relay/adaptor/vertexai"
+	"github.com/Laisky/one-api/relay/apitype"
+	"github.com/Laisky/one-api/relay/billing"
+	"github.com/Laisky/one-api/relay/billing/ratio"
+	"github.com/Laisky/one-api/relay/channeltype"
+	"github.com/Laisky/one-api/relay/constant/role"
+	"github.com/Laisky/one-api/relay/controller/validator"
+	"github.com/Laisky/one-api/relay/meta"
+	relaymodel "github.com/Laisky/one-api/relay/model"
+	quotautil "github.com/Laisky/one-api/relay/quota"
+	"github.com/Laisky/one-api/relay/relaymode"
 )
 
 func getAndValidateTextRequest(c *gin.Context, relayMode int) (*relaymodel.GeneralOpenAIRequest, error) {
@@ -195,6 +194,7 @@ func estimatePreConsumedQuota(
 			ChannelModelConfigs:    channelModelConfigs,
 			ChannelCompletionRatio: channelCompletionRatio,
 			PricingAdaptor:         resolvePricingAdaptor(meta),
+			RequestTime:            meta.StartTime,
 		})
 		bufferQuota := int64(float64(config.PreConsumedQuota) * modelRatio * groupRatio)
 		return computeResult.TotalQuota + bufferQuota
@@ -293,6 +293,7 @@ func postConsumeQuota(ctx context.Context,
 		ChannelModelConfigs:    channelModelConfigs,
 		ChannelCompletionRatio: channelCompletionRatio,
 		PricingAdaptor:         pricingAdaptor,
+		RequestTime:            meta.StartTime,
 	})
 
 	quota = computeResult.TotalQuota
@@ -302,52 +303,51 @@ func postConsumeQuota(ctx context.Context,
 	}
 
 	quotaDelta := quota - preConsumedQuota - incrementallyCharged
-	// Derive RequestId/TraceId/ProvisionalLogId from std context if possible (gin ctx embedded by gmw.BackgroundCtx)
-	var requestId string
-	var provisionalLogId int
-	if ginCtx, ok := gmw.GetGinCtxFromStdCtx(ctx); ok {
-		requestId = ginCtx.GetString(ctxkey.RequestId)
-		provisionalLogId = ginCtx.GetInt(ctxkey.ProvisionalLogId)
-	}
-	traceId := tracing.GetTraceIDFromContext(ctx)
+	// Resolve request-scoped identifiers from the detached billing snapshot (or, for a
+	// synchronous caller, from the embedded gin context). NEVER read them off a live
+	// *gin.Context here: this runs inside a post-billing goroutine and gin recycles c
+	// via sync.Pool once the handler returns.
+	billingID := billingIdentityFromContext(ctx)
+	requestId := billingID.requestID
+	provisionalLogId := billingID.provisionalLogID
+	traceId := billingID.traceID
 	if meta.TokenId > 0 && meta.UserId > 0 && meta.ChannelId > 0 {
-		var toolSummary *model.ToolUsageSummary
-		if ginCtx, ok := gmw.GetGinCtxFromStdCtx(ctx); ok {
-			if raw, exists := ginCtx.Get(ctxkey.ToolInvocationSummary); exists {
-				if summary, ok := raw.(*model.ToolUsageSummary); ok {
-					toolSummary = summary
-				}
-			}
-		}
-		metadata := model.AppendToolUsageMetadata(nil, toolSummary)
-		metadata = model.AppendCacheWriteTokensMetadata(metadata, usage.CacheWrite5mTokens, usage.CacheWrite1hTokens)
+		toolSummary := billingID.toolSummary
+		metadata := model.AppendCacheWriteTokensMetadata(nil, usage.CacheWrite5mTokens, usage.CacheWrite1hTokens)
 
 		billing.PostConsumeQuotaDetailed(billing.QuotaConsumeDetail{
-			Ctx:                    ctx,
-			TokenId:                meta.TokenId,
-			QuotaDelta:             quotaDelta,
-			TotalQuota:             quota,
-			UserId:                 meta.UserId,
-			ChannelId:              meta.ChannelId,
-			PromptTokens:           computeResult.PromptTokens,
-			CompletionTokens:       computeResult.CompletionTokens,
-			ModelRatio:             computeResult.UsedModelRatio,
-			GroupRatio:             groupRatio,
-			ModelName:              textRequest.Model,
-			TokenName:              meta.TokenName,
-			IsStream:               meta.IsStream,
-			StartTime:              meta.StartTime,
-			SystemPromptReset:      systemPromptReset,
-			CompletionRatio:        computeResult.UsedCompletionRatio,
-			ToolsCost:              usage.ToolsCost,
-			CachedPromptTokens:     computeResult.CachedPromptTokens,
-			CachedCompletionTokens: 0,
-			CacheWrite5mTokens:     usage.CacheWrite5mTokens,
-			CacheWrite1hTokens:     usage.CacheWrite1hTokens,
-			Metadata:               metadata,
-			RequestId:              requestId,
-			TraceId:                traceId,
-			ProvisionalLogId:       provisionalLogId,
+			Ctx:                ctx,
+			TokenId:            meta.TokenId,
+			QuotaDelta:         quotaDelta,
+			TotalQuota:         quota,
+			UserId:             meta.UserId,
+			UserUUID:           meta.UserUUID,
+			ChannelId:          meta.ChannelId,
+			ChannelUUID:        meta.ChannelUUID,
+			PromptTokens:       computeResult.PromptTokens,
+			CompletionTokens:   computeResult.CompletionTokens,
+			ModelRatio:         computeResult.UsedModelRatio,
+			GroupRatio:         groupRatio,
+			OriginModelName:    meta.OriginModelName,
+			ModelName:          textRequest.Model,
+			TokenUUID:          meta.TokenUUID,
+			TokenName:          meta.TokenName,
+			IsStream:           meta.IsStream,
+			StartTime:          meta.StartTime,
+			SystemPromptReset:  systemPromptReset,
+			CompletionRatio:    computeResult.UsedCompletionRatio,
+			ToolsCost:          usage.ToolsCost,
+			CachedPromptTokens: computeResult.CachedPromptTokens,
+			CacheWrite5mTokens: usage.CacheWrite5mTokens,
+			CacheWrite1hTokens: usage.CacheWrite1hTokens,
+			Metadata:           metadata,
+			RequestId:          requestId,
+			TraceId:            traceId,
+			ProvisionalLogId:   provisionalLogId,
+			UserAPIFormat:      resolveUserAPIFormat(meta.Mode),
+			UpstreamAPIFormat:  apitype.String(meta.APIType),
+			UpstreamEndpoint:   meta.UpstreamRequestURL,
+			ToolUsageSummary:   toolSummary,
 		})
 	} else {
 		gmw.GetLogger(ctx).Error("meta information incomplete, cannot post consume quota",
@@ -360,6 +360,15 @@ func postConsumeQuota(ctx context.Context,
 	}
 
 	return quota
+}
+
+// resolveUserAPIFormat returns the snake_case user-facing API format name for the given relay mode.
+// Returns an empty string when the mode is Unknown so callers can omit the metadata key.
+func resolveUserAPIFormat(mode int) string {
+	if mode == relaymode.Unknown {
+		return ""
+	}
+	return relaymode.String(mode)
 }
 
 // postConsumeQuotaWithTraceID is deprecated; callers should pass IDs via QuotaConsumeDetail
@@ -407,6 +416,7 @@ func postConsumeQuotaWithTraceID(ctx context.Context, traceId string,
 		ChannelModelConfigs:    channelModelConfigs,
 		ChannelCompletionRatio: channelCompletionRatio,
 		PricingAdaptor:         pricingAdaptor,
+		RequestTime:            meta.StartTime,
 	})
 
 	quota = computeResult.TotalQuota
@@ -416,50 +426,46 @@ func postConsumeQuotaWithTraceID(ctx context.Context, traceId string,
 	}
 
 	quotaDelta := quota - preConsumedQuota
-	var requestId string
-	var provisionalLogId int
-	if ginCtx, ok := gmw.GetGinCtxFromStdCtx(ctx); ok {
-		requestId = ginCtx.GetString(ctxkey.RequestId)
-		provisionalLogId = ginCtx.GetInt(ctxkey.ProvisionalLogId)
-	}
+	billingID := billingIdentityFromContext(ctx)
+	requestId := billingID.requestID
+	provisionalLogId := billingID.provisionalLogID
 	if meta.TokenId > 0 && meta.UserId > 0 && meta.ChannelId > 0 {
-		var toolSummary *model.ToolUsageSummary
-		if ginCtx, ok := gmw.GetGinCtxFromStdCtx(ctx); ok {
-			if raw, exists := ginCtx.Get(ctxkey.ToolInvocationSummary); exists {
-				if summary, ok := raw.(*model.ToolUsageSummary); ok {
-					toolSummary = summary
-				}
-			}
-		}
-		metadata := model.AppendToolUsageMetadata(nil, toolSummary)
-		metadata = model.AppendCacheWriteTokensMetadata(metadata, usage.CacheWrite5mTokens, usage.CacheWrite1hTokens)
+		toolSummary := billingID.toolSummary
+		metadata := model.AppendCacheWriteTokensMetadata(nil, usage.CacheWrite5mTokens, usage.CacheWrite1hTokens)
 
 		billing.PostConsumeQuotaDetailed(billing.QuotaConsumeDetail{
-			Ctx:                    ctx,
-			TokenId:                meta.TokenId,
-			QuotaDelta:             quotaDelta,
-			TotalQuota:             quota,
-			UserId:                 meta.UserId,
-			ChannelId:              meta.ChannelId,
-			PromptTokens:           computeResult.PromptTokens,
-			CompletionTokens:       computeResult.CompletionTokens,
-			ModelRatio:             computeResult.UsedModelRatio,
-			GroupRatio:             groupRatio,
-			ModelName:              textRequest.Model,
-			TokenName:              meta.TokenName,
-			IsStream:               meta.IsStream,
-			StartTime:              meta.StartTime,
-			SystemPromptReset:      systemPromptReset,
-			CompletionRatio:        computeResult.UsedCompletionRatio,
-			ToolsCost:              usage.ToolsCost,
-			CachedPromptTokens:     computeResult.CachedPromptTokens,
-			CachedCompletionTokens: 0,
-			CacheWrite5mTokens:     usage.CacheWrite5mTokens,
-			CacheWrite1hTokens:     usage.CacheWrite1hTokens,
-			Metadata:               metadata,
-			RequestId:              requestId,
-			TraceId:                traceId,
-			ProvisionalLogId:       provisionalLogId,
+			Ctx:                ctx,
+			TokenId:            meta.TokenId,
+			QuotaDelta:         quotaDelta,
+			TotalQuota:         quota,
+			UserId:             meta.UserId,
+			UserUUID:           meta.UserUUID,
+			ChannelId:          meta.ChannelId,
+			ChannelUUID:        meta.ChannelUUID,
+			PromptTokens:       computeResult.PromptTokens,
+			CompletionTokens:   computeResult.CompletionTokens,
+			ModelRatio:         computeResult.UsedModelRatio,
+			GroupRatio:         groupRatio,
+			OriginModelName:    meta.OriginModelName,
+			ModelName:          textRequest.Model,
+			TokenUUID:          meta.TokenUUID,
+			TokenName:          meta.TokenName,
+			IsStream:           meta.IsStream,
+			StartTime:          meta.StartTime,
+			SystemPromptReset:  systemPromptReset,
+			CompletionRatio:    computeResult.UsedCompletionRatio,
+			ToolsCost:          usage.ToolsCost,
+			CachedPromptTokens: computeResult.CachedPromptTokens,
+			CacheWrite5mTokens: usage.CacheWrite5mTokens,
+			CacheWrite1hTokens: usage.CacheWrite1hTokens,
+			Metadata:           metadata,
+			RequestId:          requestId,
+			TraceId:            traceId,
+			ProvisionalLogId:   provisionalLogId,
+			UserAPIFormat:      resolveUserAPIFormat(meta.Mode),
+			UpstreamAPIFormat:  apitype.String(meta.APIType),
+			UpstreamEndpoint:   meta.UpstreamRequestURL,
+			ToolUsageSummary:   toolSummary,
 		})
 	} else {
 		gmw.GetLogger(ctx).Error("meta information incomplete, cannot post consume quota",

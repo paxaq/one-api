@@ -9,11 +9,11 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/adaptor"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
-	quotautil "github.com/songquanpeng/one-api/relay/quota"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/adaptor"
+	relaymodel "github.com/Laisky/one-api/relay/model"
+	quotautil "github.com/Laisky/one-api/relay/quota"
 )
 
 // ErrQuotaExceeded indicates the user's quota was exhausted during streaming.
@@ -34,6 +34,7 @@ type QuotaTrackerParams struct {
 	ChannelModelConfigs    map[string]model.ModelConfigLocal
 	ChannelCompletionRatio map[string]float64
 	PricingAdaptor         adaptor.Adaptor
+	RequestTime            time.Time
 	FlushInterval          time.Duration
 	Logger                 *zap.Logger
 	Ctx                    context.Context
@@ -229,6 +230,7 @@ func (t *QuotaTracker) computeTargetQuotaLocked() int64 {
 		ChannelModelConfigs:    t.params.ChannelModelConfigs,
 		ChannelCompletionRatio: t.params.ChannelCompletionRatio,
 		PricingAdaptor:         t.params.PricingAdaptor,
+		RequestTime:            t.params.RequestTime,
 	})
 	target := max(result.TotalQuota-t.params.PreConsumedQuota, 0)
 	return target

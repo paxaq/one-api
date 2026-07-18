@@ -6,7 +6,7 @@ This document provides essential development information for the One-API project
 
 ### Go Requirements
 
-- **Go Version**: 1.25.0 (cutting-edge version required)
+- **Go Version**: 1.26.0 (cutting-edge version required)
 - **CGO**: Enabled (required for SQLite3 support)
 - **Architecture**: Primarily targets AMD64, multi-arch builds supported
 
@@ -144,7 +144,7 @@ FRONTEND_BASE_URL=https://...      # For slave nodes
 
 ### Code Organization
 
-- **Local imports first**: `goimports -local module,github.com/songquanpeng/one-api`
+- **Local imports first**: `goimports -local module,github.com/Laisky/one-api`
 - **Extensive linting**: 565-line golangci-lint configuration
 - **Security scanning**: govulncheck integration
 - **Dependency management**: Go modules with version constraints
@@ -207,4 +207,4 @@ FRONTEND_BASE_URL=https://...      # For slave nodes
 
 ---
 
-**Note**: This project uses cutting-edge Go 1.25.0 and maintains high code quality standards through extensive tooling. The adapter pattern is the core architectural decision that enables support for 35+ AI providers while maintaining consistent pricing and request handling.
+**Note**: This project uses cutting-edge Go 1.26.0 and maintains high code quality standards through extensive tooling. The adapter pattern is the core architectural decision that enables support for 35+ AI providers while maintaining consistent pricing and request handling.

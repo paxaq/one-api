@@ -9,12 +9,12 @@ import (
 	"github.com/Laisky/zap"
 	"gorm.io/gorm"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/blacklist"
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/helper"
-	"github.com/songquanpeng/one-api/common/logger"
-	"github.com/songquanpeng/one-api/common/random"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/blacklist"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/helper"
+	"github.com/Laisky/one-api/common/logger"
+	"github.com/Laisky/one-api/common/random"
 )
 
 const (
@@ -34,8 +34,9 @@ const (
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
 	Id               int             `json:"id"`
+	UUID             string          `json:"uuid" gorm:"type:char(36);column:uuid"`
 	Username         string          `json:"username" gorm:"unique;index" validate:"max=30"`
-	Password         string          `json:"password" gorm:"not null;" validate:"min=8,max=20"`
+	Password         string          `json:"-" gorm:"not null;" validate:"min=8,max=20"`
 	DisplayName      string          `json:"display_name" gorm:"index" validate:"max=20"`
 	Role             int             `json:"role" gorm:"type:int;default:1"`   // admin, util
 	Status           int             `json:"status" gorm:"type:int;default:1"` // enabled, disabled
@@ -44,16 +45,18 @@ type User struct {
 	WeChatId         string          `json:"wechat_id" gorm:"column:wechat_id;index"`
 	LarkId           string          `json:"lark_id" gorm:"column:lark_id;index"`
 	OidcId           string          `json:"oidc_id" gorm:"column:oidc_id;index"`
-	VerificationCode string          `json:"verification_code" gorm:"-:all"`                                    // this field is only for Email verification, don't save it to database!
-	AccessToken      string          `json:"access_token" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
-	TotpSecret       string          `json:"totp_secret,omitempty" gorm:"type:varchar(64);column:totp_secret"`  // TOTP secret for 2FA, omit from JSON when empty
+	VerificationCode string          `json:"-" gorm:"-:all"`                                         // Email verification code; inbound-only (bound via dto.UserRegisterRequest), never persisted or serialized
+	AccessToken      string          `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // system-management token; never serialized (GenerateAccessToken returns it as a raw string)
+	TotpSecret       string          `json:"-" gorm:"type:varchar(64);column:totp_secret"`           // TOTP 2FA secret; never serialized
 	Quota            int64           `json:"quota" gorm:"bigint;default:0"`
 	UsedQuota        int64           `json:"used_quota" gorm:"bigint;default:0;column:used_quota"` // used quota
 	RequestCount     int             `json:"request_count" gorm:"type:int;default:0;"`             // request number
 	Group            string          `json:"group" gorm:"type:varchar(32);default:'default'"`
 	AffCode          string          `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
 	InviterId        int             `json:"inviter_id" gorm:"type:int;column:inviter_id;index"`
+	InviterUUID      *string         `json:"inviter_uuid" gorm:"type:char(36);column:inviter_uuid;index"`
 	MCPToolBlacklist JSONStringSlice `json:"mcp_tool_blacklist" gorm:"type:text"`
+	Metadata         UserMetadata    `json:"metadata" gorm:"type:text;serializer:json"`
 	CreatedAt        int64           `json:"created_at" gorm:"bigint;autoCreateTime:milli"`
 	UpdatedAt        int64           `json:"updated_at" gorm:"bigint;autoUpdateTime:milli"`
 }
@@ -99,23 +102,32 @@ func GetAllUsers(startIdx int, num int, order string, sortBy string, sortOrder s
 	}
 
 	err = query.Find(&users).Error
-	return users, err
+	if err != nil {
+		return nil, errors.Wrap(err, "get all users")
+	}
+	return users, nil
 }
 
 func GetUserCount() (count int64, err error) {
 	err = DB.Model(&User{}).Where("status != ?", UserStatusDeleted).Count(&count).Error
-	return count, err
+	if err != nil {
+		return 0, errors.Wrap(err, "count users")
+	}
+	return count, nil
 }
 
 func SearchUsers(keyword string, sortBy string, sortOrder string) (users []*User, err error) {
 	orderClause := ValidateOrderClause(sortBy, sortOrder, userSortFields, "id desc")
 
 	if !common.UsingPostgreSQL.Load() {
-		err = DB.Omit("password").Where("id = ? or username LIKE ? or email LIKE ? or display_name LIKE ?", keyword, keyword+"%", keyword+"%", keyword+"%").Order(orderClause).Find(&users).Error
+		err = DB.Omit("password").Where("id = ? or username LIKE ? or email LIKE ? or display_name LIKE ? or uuid = ?", helper.String2Int(keyword), keyword+"%", keyword+"%", keyword+"%", normalizeUUIDKeyword(keyword)).Order(orderClause).Find(&users).Error
 	} else {
-		err = DB.Omit("password").Where("username LIKE ? or email LIKE ? or display_name LIKE ?", keyword+"%", keyword+"%", keyword+"%").Order(orderClause).Find(&users).Error
+		err = DB.Omit("password").Where("username LIKE ? or email LIKE ? or display_name LIKE ? or uuid = ?", keyword+"%", keyword+"%", keyword+"%", normalizeUUIDKeyword(keyword)).Order(orderClause).Find(&users).Error
 	}
-	return users, err
+	if err != nil {
+		return nil, errors.Wrap(err, "search users")
+	}
+	return users, nil
 }
 
 func GetUserById(id int, selectAll bool) (*User, error) {
@@ -129,7 +141,10 @@ func GetUserById(id int, selectAll bool) (*User, error) {
 	} else {
 		err = DB.Omit("password", "access_token").First(&user, "id = ?", id).Error
 	}
-	return &user, err
+	if err != nil {
+		return nil, errors.Wrapf(err, "get user by id %d", id)
+	}
+	return &user, nil
 }
 
 func GetUserIdByAffCode(affCode string) (int, error) {
@@ -138,7 +153,10 @@ func GetUserIdByAffCode(affCode string) (int, error) {
 	}
 	var user User
 	err := DB.Select("id").First(&user, "aff_code = ?", affCode).Error
-	return user.Id, err
+	if err != nil {
+		return 0, errors.Wrapf(err, "get user id by aff code %s", affCode)
+	}
+	return user.Id, nil
 }
 
 func DeleteUserById(id int) (err error) {
@@ -160,6 +178,15 @@ func (user *User) Insert(ctx context.Context, inviterId int) error {
 	user.Quota = config.QuotaForNewUser
 	user.AccessToken = random.GetUUID()
 	user.AffCode = random.GetRandomString(4)
+	if inviterId != 0 {
+		inviterUUID, err := GetUserUUIDByID(inviterId)
+		if err != nil {
+			return errors.Wrapf(err, "get inviter uuid for user: username=%s, inviterId=%d", user.Username, inviterId)
+		}
+		if inviterUUID != "" {
+			user.InviterUUID = &inviterUUID
+		}
+	}
 	result := DB.Create(user)
 	if result.Error != nil {
 		return errors.Wrapf(result.Error, "failed to create user: username=%s, inviterId=%d", user.Username, inviterId)
@@ -180,6 +207,7 @@ func (user *User) Insert(ctx context.Context, inviterId int) error {
 	// create default token
 	cleanToken := Token{
 		UserId:         user.Id,
+		UserUUID:       &user.UUID,
 		Name:           "default",
 		Key:            random.GenerateKey(),
 		CreatedTime:    helper.GetTimestamp(),
@@ -212,7 +240,7 @@ func (user *User) Update(updatePassword bool) error {
 	case UserStatusEnabled:
 		blacklist.UnbanUser(user.Id)
 	}
-	err = DB.Model(user).Updates(user).Error
+	err = DB.Model(user).Omit("uuid", "inviter_uuid").Updates(user).Error
 	if err != nil {
 		return errors.Wrapf(err, "failed to update user: id=%d, username=%s", user.Id, user.Username)
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/common/ctxkey"
 )
 
 // GetRequestBody reads and caches the request body so it can be reused later in the handler chain.
@@ -44,7 +44,7 @@ func UnmarshalBodyReusable(c *gin.Context, v any) error {
 	}
 
 	// check v should be a pointer
-	if v == nil || reflect.TypeOf(v).Kind() != reflect.Ptr {
+	if v == nil || reflect.TypeOf(v).Kind() != reflect.Pointer {
 		return errors.Errorf("UnmarshalBodyReusable only accept pointer, got %v", reflect.TypeOf(v))
 	}
 
@@ -81,7 +81,7 @@ func LogClientRequestPayload(c *gin.Context, label string, limit int) error {
 	preview, truncated := SanitizePayloadForLogging(body, limit)
 	fields := []zap.Field{
 		zap.String("method", c.Request.Method),
-		zap.String("url", c.Request.URL.String()),
+		zap.String("url", SanitizeURLForLogging(c.Request.URL.String())),
 		zap.Int("body_bytes", len(body)),
 		zap.Bool("body_truncated", truncated),
 		zap.ByteString("body_preview", preview),

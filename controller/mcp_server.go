@@ -12,11 +12,11 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/helper"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/mcp"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/helper"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/mcp"
 )
 
 // MCPServerUpsertRequest describes MCP server create or update payloads.
@@ -91,7 +91,7 @@ func GetMCPServers(c *gin.Context) {
 
 // GetMCPServer returns details for a MCP server.
 func GetMCPServer(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id, err := resolveMCPServerRef(c.Param("id"))
 	if err != nil {
 		helper.RespondError(c, err)
 		return
@@ -121,7 +121,24 @@ func CreateMCPServer(c *gin.Context) {
 
 	server := &model.MCPServer{}
 	applyMCPServerPayload(server, payload)
+	if err := server.NormalizeAndValidate(); err != nil {
+		helper.RespondError(c, errors.Wrap(err, "normalize and validate mcp server"))
+		return
+	}
+	nameTaken, err := isMCPServerNameAlreadyUsed(server.Name, 0)
+	if err != nil {
+		helper.RespondError(c, err)
+		return
+	}
+	if nameTaken {
+		respondMCPServerNameTaken(c)
+		return
+	}
 	if err := model.CreateMCPServer(server); err != nil {
+		if isMCPServerNameTakenError(err) {
+			respondMCPServerNameTaken(c)
+			return
+		}
 		logger.Error("failed to create mcp server", zap.Error(err))
 		helper.RespondError(c, err)
 		return
@@ -137,15 +154,15 @@ func CreateMCPServer(c *gin.Context) {
 // UpdateMCPServer updates an existing MCP server.
 func UpdateMCPServer(c *gin.Context) {
 	logger := gmw.GetLogger(c)
-	id, err := strconv.Atoi(c.Param("id"))
+	id, err := resolveMCPServerRef(c.Param("id"))
 	if err != nil {
 		helper.RespondError(c, err)
 		return
 	}
 
-	var payload MCPServerUpsertRequest
-	if err := json.NewDecoder(c.Request.Body).Decode(&payload); err != nil {
-		helper.RespondError(c, errors.Wrap(err, "decode mcp server"))
+	payload, providedFields, err := bindMCPServerPayload(c)
+	if err != nil {
+		helper.RespondError(c, err)
 		return
 	}
 
@@ -156,7 +173,33 @@ func UpdateMCPServer(c *gin.Context) {
 	}
 
 	applyMCPServerPayload(server, payload)
+	// Mask handling: when the api_key was present in the payload but the value
+	// is a masked secret placeholder, we leave the existing value untouched
+	// and must NOT overwrite the column with an empty string.
+	if payload.APIKey != nil && common.IsMaskedSecret(*payload.APIKey) {
+		delete(providedFields, "api_key")
+	}
+	if err := server.NormalizeAndValidate(); err != nil {
+		helper.RespondError(c, errors.Wrap(err, "normalize and validate mcp server"))
+		return
+	}
+	if providedFields["name"] {
+		nameTaken, err := isMCPServerNameAlreadyUsed(server.Name, server.Id)
+		if err != nil {
+			helper.RespondError(c, err)
+			return
+		}
+		if nameTaken {
+			respondMCPServerNameTaken(c)
+			return
+		}
+	}
+	server.ProvidedFields = providedFields
 	if err := model.UpdateMCPServer(server); err != nil {
+		if isMCPServerNameTakenError(err) {
+			respondMCPServerNameTaken(c)
+			return
+		}
 		logger.Error("failed to update mcp server", zap.Error(err))
 		helper.RespondError(c, err)
 		return
@@ -169,9 +212,58 @@ func UpdateMCPServer(c *gin.Context) {
 	})
 }
 
+// bindMCPServerPayload decodes the upsert request and returns a map of which
+// database columns were explicitly present in the raw request body. Mirrors
+// bindChannelPayload so we can persist zero/empty values that GORM's
+// struct-based Updates would otherwise silently skip.
+func bindMCPServerPayload(c *gin.Context) (MCPServerUpsertRequest, map[string]bool, error) {
+	var payload MCPServerUpsertRequest
+	if err := common.UnmarshalBodyReusable(c, &payload); err != nil {
+		return payload, nil, errors.Wrap(err, "unmarshal mcp server payload")
+	}
+
+	requestBody, err := common.GetRequestBody(c)
+	if err != nil {
+		return payload, nil, errors.Wrap(err, "get request body")
+	}
+
+	rawFields := make(map[string]json.RawMessage)
+	if len(requestBody) > 0 {
+		if err := json.Unmarshal(requestBody, &rawFields); err != nil {
+			return payload, nil, errors.Wrap(err, "unmarshal raw mcp server fields")
+		}
+	}
+
+	// Map JSON field names to database column names. Only include columns
+	// that the UpdateMCPServer store path knows how to apply per-column.
+	jsonToColumn := map[string]string{
+		"name":                       "name",
+		"description":                "description",
+		"status":                     "status",
+		"priority":                   "priority",
+		"base_url":                   "base_url",
+		"protocol":                   "protocol",
+		"auth_type":                  "auth_type",
+		"api_key":                    "api_key",
+		"headers":                    "headers",
+		"tool_whitelist":             "tool_whitelist",
+		"tool_blacklist":             "tool_blacklist",
+		"tool_pricing":               "tool_pricing",
+		"auto_sync_enabled":          "auto_sync_enabled",
+		"auto_sync_interval_minutes": "auto_sync_interval_minutes",
+	}
+	provided := make(map[string]bool, len(jsonToColumn))
+	for jsonName, column := range jsonToColumn {
+		if _, ok := rawFields[jsonName]; ok {
+			provided[column] = true
+		}
+	}
+	return payload, provided, nil
+}
+
 // DeleteMCPServer deletes a MCP server by ID.
 func DeleteMCPServer(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id, err := resolveMCPServerRef(c.Param("id"))
 	if err != nil {
 		helper.RespondError(c, err)
 		return
@@ -190,7 +282,7 @@ func DeleteMCPServer(c *gin.Context) {
 
 // SyncMCPServer triggers a manual tool sync for a MCP server.
 func SyncMCPServer(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id, err := resolveMCPServerRef(c.Param("id"))
 	if err != nil {
 		helper.RespondError(c, err)
 		return
@@ -226,7 +318,7 @@ func SyncMCPServer(c *gin.Context) {
 
 // TestMCPServer validates connectivity with a MCP server.
 func TestMCPServer(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id, err := resolveMCPServerRef(c.Param("id"))
 	if err != nil {
 		helper.RespondError(c, err)
 		return
@@ -264,7 +356,7 @@ func TestMCPServer(c *gin.Context) {
 // ListMCPServerTools returns tools for a MCP server.
 func ListMCPServerTools(c *gin.Context) {
 	logger := gmw.GetLogger(c)
-	id, err := strconv.Atoi(c.Param("id"))
+	id, err := resolveMCPServerRef(c.Param("id"))
 	if err != nil {
 		helper.RespondError(c, err)
 		return
@@ -306,7 +398,7 @@ type ToolsDisplayServerEntry struct {
 
 // MCPServerDisplayInfo is a sanitized view of MCPServer for public display (no secrets).
 type MCPServerDisplayInfo struct {
-	Id       int    `json:"id"`
+	UUID     string `json:"uuid"`
 	Name     string `json:"name"`
 	Status   int    `json:"status"`
 	Protocol string `json:"protocol"`
@@ -317,10 +409,7 @@ type MCPServerDisplayInfo struct {
 func GetToolsDisplay(c *gin.Context) {
 	servers, err := model.ListEnabledMCPServers()
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "Failed to load MCP servers: " + err.Error(),
-		})
+		helper.RespondError(c, errors.Wrap(err, "Failed to load MCP servers"))
 		return
 	}
 
@@ -349,7 +438,7 @@ func GetToolsDisplay(c *gin.Context) {
 
 		result = append(result, ToolsDisplayServerEntry{
 			Server: &MCPServerDisplayInfo{
-				Id:       server.Id,
+				UUID:     server.UUID,
 				Name:     server.Name,
 				Status:   server.Status,
 				Protocol: server.Protocol,
@@ -466,6 +555,32 @@ func applyMCPServerPayload(server *model.MCPServer, payload MCPServerUpsertReque
 	if payload.AutoSyncIntervalMinutes != nil {
 		server.AutoSyncIntervalMinutes = *payload.AutoSyncIntervalMinutes
 	}
+}
+
+// isMCPServerNameAlreadyUsed reports whether another MCP server already owns
+// the normalized name. excludedID lets update requests ignore the current row.
+func isMCPServerNameAlreadyUsed(name string, excludedID int) (bool, error) {
+	query := model.DB.Model(&model.MCPServer{}).Where("name = ?", strings.TrimSpace(name))
+	if excludedID > 0 {
+		query = query.Where("id <> ?", excludedID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, errors.Wrap(err, "check mcp server name")
+	}
+	return count > 0, nil
+}
+
+// isMCPServerNameTakenError reports whether an MCP server write failed because
+// the database rejected a duplicate unique name.
+func isMCPServerNameTakenError(err error) bool {
+	return isDuplicateDBErrorForField(err, "name", "mcp_servers.name", "idx_mcp_servers_name")
+}
+
+// respondMCPServerNameTaken returns a public duplicate-name response for MCP
+// server create and update requests.
+func respondMCPServerNameTaken(c *gin.Context) {
+	respondDuplicateOperation(c, "MCP server name already exists")
 }
 
 func sanitizeMCPServer(server *model.MCPServer) *model.MCPServer {

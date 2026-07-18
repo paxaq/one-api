@@ -9,7 +9,7 @@ import (
 
 	"github.com/Laisky/errors/v2"
 
-	"github.com/songquanpeng/one-api/relay/model"
+	"github.com/Laisky/one-api/relay/model"
 )
 
 // ResponseAPIStreamEvent represents a flexible structure for Response API streaming events
@@ -102,7 +102,7 @@ func ParseResponseAPIStreamEventFromReader(reader io.Reader) (*ResponseAPIRespon
 	if envelope.Id != "" && envelope.Type == "" {
 		fullResponse, err := buildResponseAPIResponseFromEnvelope(&envelope)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, errors.Wrap(err, "build response API response from envelope")
 		}
 
 		return fullResponse, nil, nil

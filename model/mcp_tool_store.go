@@ -56,11 +56,14 @@ func CountMCPTools(serverID int, status *int) (int64, error) {
 }
 
 // GetMCPToolsByServerID fetches tools for a specific server.
+//
+// The empty case returns a non-nil zero-length slice so HTTP handlers that
+// pass the result straight to c.JSON marshal "data" as [] rather than null.
 func GetMCPToolsByServerID(serverID int) ([]*MCPTool, error) {
 	if serverID <= 0 {
 		return nil, errors.New("server id is invalid")
 	}
-	var tools []*MCPTool
+	tools := make([]*MCPTool, 0)
 	if err := DB.Where("server_id = ?", serverID).Find(&tools).Error; err != nil {
 		return nil, errors.Wrap(err, "get mcp tools")
 	}
@@ -68,7 +71,7 @@ func GetMCPToolsByServerID(serverID int) ([]*MCPTool, error) {
 }
 
 // UpsertMCPTools replaces tools for a server with the provided list.
-func UpsertMCPTools(serverID int, tools []*MCPTool) error {
+func UpsertMCPTools(serverID int, serverUUID string, tools []*MCPTool) error {
 	if serverID <= 0 {
 		return errors.New("server id is invalid")
 	}
@@ -80,6 +83,9 @@ func UpsertMCPTools(serverID int, tools []*MCPTool) error {
 			continue
 		}
 		tool.ServerId = serverID
+		if serverUUID != "" {
+			tool.ServerUUID = &serverUUID
+		}
 		tool.NormalizeName()
 		if err := DB.Create(tool).Error; err != nil {
 			return errors.Wrap(err, "create mcp tool")

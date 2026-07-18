@@ -9,14 +9,14 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/adaptor"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai"
-	"github.com/songquanpeng/one-api/relay/billing/ratio"
-	"github.com/songquanpeng/one-api/relay/channeltype"
-	metalib "github.com/songquanpeng/one-api/relay/meta"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/adaptor"
+	"github.com/Laisky/one-api/relay/adaptor/openai"
+	"github.com/Laisky/one-api/relay/billing/ratio"
+	"github.com/Laisky/one-api/relay/channeltype"
+	metalib "github.com/Laisky/one-api/relay/meta"
+	relaymodel "github.com/Laisky/one-api/relay/model"
 )
 
 // ValidateChatBuiltinTools ensures the chat request only references built-in tools allowed for the channel/model.
@@ -440,7 +440,7 @@ func (p toolPolicy) isAllowed(tool string) bool {
 }
 
 // buildToolPolicy merges channel overrides with provider defaults to construct the effective policy.
-func buildToolPolicy(channel *model.Channel, provider adaptor.Adaptor, _ string) toolPolicy {
+func buildToolPolicy(channel *model.Channel, provider adaptor.Adaptor, modelName string) toolPolicy {
 	policy := toolPolicy{
 		allowed:         make(map[string]struct{}),
 		pricing:         make(map[string]int64),
@@ -487,7 +487,13 @@ func buildToolPolicy(channel *model.Channel, provider adaptor.Adaptor, _ string)
 
 	var providerTooling *adaptor.ChannelToolConfig
 	if provider != nil {
-		if defaults, ok := provider.(adaptor.ToolingDefaultsProvider); ok {
+		// Prefer per-model tooling defaults when the adaptor exposes them (e.g. Gemini
+		// bills grounded web search at $14/1K for 3.x vs $35/1K for 2.5 and earlier);
+		// fall back to the channel-wide defaults otherwise.
+		if perModel, ok := provider.(adaptor.ToolingDefaultsForModelProvider); ok {
+			cfg := perModel.DefaultToolingConfigForModel(modelName)
+			providerTooling = &cfg
+		} else if defaults, ok := provider.(adaptor.ToolingDefaultsProvider); ok {
 			cfg := defaults.DefaultToolingConfig()
 			providerTooling = &cfg
 		}

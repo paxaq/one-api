@@ -10,10 +10,12 @@ import { useEffect } from 'react';
 import { ChannelAdvancedSettings } from './components/ChannelAdvancedSettings';
 import { ChannelBasicInfo } from './components/ChannelBasicInfo';
 import { ChannelEndpointSettings } from './components/ChannelEndpointSettings';
+import { ChannelGroups } from './components/ChannelGroups';
 import { ChannelMCPSettings } from './components/ChannelMCPSettings';
 import { ChannelModelSettings } from './components/ChannelModelSettings';
 import { ChannelSpecificConfig } from './components/ChannelSpecificConfig';
 import { ChannelToolingSettings } from './components/ChannelToolingSettings';
+import { ChannelSaveWarningDialog } from './components/ChannelSaveWarningDialog';
 import { ChannelTypeChangeDialog } from './components/ChannelTypeChangeDialog';
 import { CHANNEL_TYPES } from './constants';
 import { useChannelForm } from './hooks/useChannelForm';
@@ -44,6 +46,10 @@ export function EditChannelPage() {
     requestTypeChange,
     confirmTypeChange,
     cancelTypeChange,
+    // Save warning handling
+    pendingSaveConfirmation,
+    confirmSave,
+    cancelSave,
   } = useChannelForm();
 
   const selectedChannelType = CHANNEL_TYPES.find((t) => t.value === normalizedChannelType);
@@ -81,7 +87,7 @@ export function EditChannelPage() {
   // RHF invalid handler
   const onInvalid = (errors: any) => {
     const firstKey = Object.keys(errors)[0];
-    const firstMsg = errors[firstKey]?.message || 'Please correct the highlighted fields.';
+    const firstMsg = errors[firstKey]?.message || tr('validation.fix_fields', 'Please correct the highlighted fields.');
     notify({
       type: 'error',
       title: tr('validation.error_title', 'Validation error'),
@@ -118,6 +124,17 @@ export function EditChannelPage() {
           onCancel={cancelTypeChange}
           tr={tr}
         />
+        <ChannelSaveWarningDialog
+          open={pendingSaveConfirmation !== null}
+          onOpenChange={(open) => {
+            if (!open) cancelSave();
+          }}
+          unreachableMappingKeys={pendingSaveConfirmation?.unreachableMappingKeys ?? []}
+          unknownMappingTargets={pendingSaveConfirmation?.unknownMappingTargets ?? []}
+          onConfirm={confirmSave}
+          onCancel={cancelSave}
+          tr={tr}
+        />
         <Card className="border-0 shadow-none md:border md:shadow-sm">
           <CardContent className="space-y-6 p-4 sm:p-6">
             {selectedChannelType?.description && (
@@ -138,13 +155,7 @@ export function EditChannelPage() {
             )}
             <Form {...form}>
               <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} className="space-y-6">
-                <ChannelBasicInfo
-                  form={form}
-                  groups={groups}
-                  normalizedChannelType={normalizedChannelType}
-                  tr={tr}
-                  onTypeChange={requestTypeChange}
-                />
+                <ChannelBasicInfo form={form} normalizedChannelType={normalizedChannelType} tr={tr} onTypeChange={requestTypeChange} />
 
                 <ChannelSpecificConfig
                   form={form}
@@ -153,6 +164,8 @@ export function EditChannelPage() {
                   baseURLEditable={baseURLEditable}
                   tr={tr}
                 />
+
+                <ChannelGroups form={form} groups={groups} tr={tr} />
 
                 <ChannelModelSettings
                   form={form}
@@ -165,7 +178,13 @@ export function EditChannelPage() {
 
                 <ChannelAdvancedSettings form={form} normalizedChannelType={normalizedChannelType} tr={tr} />
 
-                <ChannelEndpointSettings form={form} allEndpoints={allEndpoints} defaultEndpoints={defaultEndpoints} tr={tr} />
+                <ChannelEndpointSettings
+                  form={form}
+                  allEndpoints={allEndpoints}
+                  defaultEndpoints={defaultEndpoints}
+                  defaultBaseURL={defaultBaseURL}
+                  tr={tr}
+                />
 
                 <ChannelToolingSettings form={form} defaultTooling={defaultTooling} tr={tr} notify={notify} />
 

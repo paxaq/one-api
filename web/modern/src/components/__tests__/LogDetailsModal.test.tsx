@@ -106,6 +106,7 @@ describe('LogDetailsModal', () => {
       type: LOG_TYPES.CONSUME,
       created_at: 1_700_000_000,
       model_name: 'gpt-4',
+      origin_model_name: 'public-alias',
       token_name: 'prod-token',
       username: '',
       channel: 12,
@@ -113,7 +114,6 @@ describe('LogDetailsModal', () => {
       prompt_tokens: 1_200,
       completion_tokens: 800,
       cached_prompt_tokens: 200,
-      cached_completion_tokens: 150,
       elapsed_time: 2_345,
       request_id: 'req-123',
       trace_id: '',
@@ -137,6 +137,8 @@ describe('LogDetailsModal', () => {
     expect(screen.getAllByText(formatTimestamp(log.created_at)).length).toBeGreaterThan(0);
     expect(screen.getByText(renderQuota(log.quota))).toBeInTheDocument();
     expect(screen.getByText('gpt-4')).toBeInTheDocument();
+    expect(screen.getByText('public-alias')).toBeInTheDocument();
+    expect(screen.getByText(/requested model/i)).toBeInTheDocument();
     expect(screen.getByText('prod-token')).toBeInTheDocument();
     expect(screen.getByText('fallback-user')).toBeInTheDocument();
     expect(screen.getByText('12')).toBeInTheDocument();
@@ -156,9 +158,6 @@ describe('LogDetailsModal', () => {
 
     const totalTokens = screen.getByText(/total tokens/i).closest('div');
     expect(totalTokens).toHaveTextContent('2000');
-
-    const totalCachedTokens = screen.getByText(/total cached tokens/i).closest('div');
-    expect(totalCachedTokens).toHaveTextContent('350');
 
     expect(screen.getByText('Stream')).toBeInTheDocument();
     expect(screen.getByText('System Reset')).toBeInTheDocument();
@@ -180,7 +179,6 @@ describe('LogDetailsModal', () => {
       prompt_tokens: 600,
       completion_tokens: 400,
       cached_prompt_tokens: 0,
-      cached_completion_tokens: 0,
       elapsed_time: 3_000,
       request_id: 'req-trace',
       trace_id: 'trace-abc',
@@ -236,5 +234,84 @@ describe('LogDetailsModal', () => {
     expect(screen.getByText('200')).toBeInTheDocument();
     expect(screen.getByText(/total request time/i)).toBeInTheDocument();
     expect(screen.getAllByText(/request received/i).length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ['MANAGE', LOG_TYPES.MANAGE],
+    ['SYSTEM', LOG_TYPES.SYSTEM],
+    ['TEST', LOG_TYPES.TEST],
+    ['TOPUP', LOG_TYPES.TOPUP],
+  ])('fetches trace data for %s logs when trace_id is present (regression: not CONSUME-gated)', async (_label, type) => {
+    const log: LogEntry = {
+      id: 99,
+      type,
+      created_at: 1_700_200_000,
+      model_name: '',
+      token_name: '',
+      username: 'trace-any',
+      channel: 1,
+      quota: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cached_prompt_tokens: 0,
+      elapsed_time: 100,
+      request_id: 'req-any',
+      trace_id: 'trace-any',
+      metadata: {},
+    };
+
+    apiGetMock().mockResolvedValue({
+      data: {
+        success: true,
+        data: {
+          id: 12,
+          trace_id: 'trace-any',
+          url: '/api/channel/test/3',
+          method: 'GET',
+          status: 200,
+          created_at: 1_700_200_000,
+          updated_at: 1_700_200_001,
+          timestamps: {},
+          durations: { total_time: 100 },
+          log: { id: 99, user_id: 1, username: 'trace-any', content: '', type },
+        },
+      },
+    } as any);
+
+    await act(async () => {
+      renderLogDetailsModal(log);
+    });
+
+    await waitFor(() => {
+      expect(apiGetMock()).toHaveBeenCalledWith('/api/trace/log/99');
+    });
+  });
+
+  it('does not fetch trace data when trace_id is empty regardless of log type', async () => {
+    const log: LogEntry = {
+      id: 100,
+      type: LOG_TYPES.CONSUME,
+      created_at: 1_700_300_000,
+      model_name: 'gpt-4',
+      token_name: 't',
+      username: 'u',
+      channel: 1,
+      quota: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cached_prompt_tokens: 0,
+      elapsed_time: 0,
+      request_id: '',
+      trace_id: '',
+      metadata: {},
+    };
+
+    apiGetMock().mockResolvedValue({ data: { success: true, data: null } } as any);
+
+    await act(async () => {
+      renderLogDetailsModal(log);
+    });
+
+    expect(apiGetMock()).not.toHaveBeenCalled();
   });
 });

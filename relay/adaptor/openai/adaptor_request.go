@@ -10,21 +10,22 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/common/image"
-	"github.com/songquanpeng/one-api/relay/adaptor"
-	"github.com/songquanpeng/one-api/relay/adaptor/alibailian"
-	"github.com/songquanpeng/one-api/relay/adaptor/baiduv2"
-	"github.com/songquanpeng/one-api/relay/adaptor/doubao"
-	"github.com/songquanpeng/one-api/relay/adaptor/geminiOpenaiCompatible"
-	"github.com/songquanpeng/one-api/relay/adaptor/minimax"
-	"github.com/songquanpeng/one-api/relay/adaptor/novita"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai_compatible"
-	"github.com/songquanpeng/one-api/relay/channeltype"
-	"github.com/songquanpeng/one-api/relay/meta"
-	"github.com/songquanpeng/one-api/relay/model"
-	"github.com/songquanpeng/one-api/relay/relaymode"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/common/image"
+	"github.com/Laisky/one-api/relay/adaptor"
+	"github.com/Laisky/one-api/relay/adaptor/alibailian"
+	"github.com/Laisky/one-api/relay/adaptor/baiduv2"
+	"github.com/Laisky/one-api/relay/adaptor/common/toolnamesafe"
+	"github.com/Laisky/one-api/relay/adaptor/doubao"
+	"github.com/Laisky/one-api/relay/adaptor/geminiOpenaiCompatible"
+	"github.com/Laisky/one-api/relay/adaptor/minimax"
+	"github.com/Laisky/one-api/relay/adaptor/novita"
+	"github.com/Laisky/one-api/relay/adaptor/openai_compatible"
+	"github.com/Laisky/one-api/relay/channeltype"
+	"github.com/Laisky/one-api/relay/meta"
+	"github.com/Laisky/one-api/relay/model"
+	"github.com/Laisky/one-api/relay/relaymode"
 )
 
 // azureRequiresResponseAPI returns true when Azure supports the model only via the Response API.
@@ -208,7 +209,11 @@ func (a *Adaptor) ConvertRequest(c *gin.Context, relayMode int, request *model.G
 		normalizeDeepSeekToolMessageContent(lg, request)
 	}
 
-	if config.DebugEnabled {
+	if rewrites := toolnamesafe.SanitizeRequestToolNames(c, request); rewrites > 0 && lg != nil {
+		lg.Debug("sanitized tool/function names for strict upstream validators",
+			zap.String("model", request.Model),
+			zap.Int("rewritten_count", rewrites),
+		)
 	}
 
 	if relayMode == relaymode.ResponseAPI {
@@ -441,9 +446,15 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, request *model.ClaudeRequ
 	metaInfo := meta.GetByContext(c)
 	if shouldNormalizeToolMessageContentForDeepSeek(metaInfo, openaiRequest) {
 		normalizeClaudeThinkingForDeepSeek(gmw.GetLogger(c), openaiRequest)
-	}
-	if shouldNormalizeToolMessageContentForDeepSeek(metaInfo, openaiRequest) {
 		normalizeDeepSeekToolMessageContent(gmw.GetLogger(c), openaiRequest)
+	}
+	if rewrites := toolnamesafe.SanitizeRequestToolNames(c, openaiRequest); rewrites > 0 {
+		if lg := gmw.GetLogger(c); lg != nil {
+			lg.Debug("sanitized tool/function names for strict upstream validators",
+				zap.String("model", openaiRequest.Model),
+				zap.Int("rewritten_count", rewrites),
+			)
+		}
 	}
 	if shouldForceResponseAPI(metaInfo) {
 		if err := a.applyRequestTransformations(metaInfo, openaiRequest); err != nil {

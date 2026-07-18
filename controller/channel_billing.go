@@ -11,15 +11,16 @@ import (
 	"github.com/Laisky/errors/v2"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/client"
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/logger"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/monitor"
-	"github.com/songquanpeng/one-api/relay/channeltype"
+	"github.com/Laisky/one-api/common/client"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/helper"
+	"github.com/Laisky/one-api/common/logger"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/monitor"
+	"github.com/Laisky/one-api/relay/channeltype"
 )
 
-// https://github.com/songquanpeng/one-api/issues/79
+// https://github.com/Laisky/one-api/issues/79
 
 type OpenAISubscriptionResponse struct {
 	Object             string  `json:"object"`
@@ -202,7 +203,7 @@ func updateChannelAIProxyBalance(channel *model.Channel) (float64, error) {
 	response := AIProxyUserOverviewResponse{}
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "unmarshal AIProxy user overview response")
 	}
 	if !response.Success {
 		return 0, errors.Errorf("code: %d, message: %s", response.ErrorCode, response.Message)
@@ -216,12 +217,12 @@ func updateChannelAPI2GPTBalance(channel *model.Channel) (float64, error) {
 	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
 
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "get API2GPT balance response")
 	}
 	response := API2GPTUsageResponse{}
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "unmarshal API2GPT usage response")
 	}
 	channel.UpdateBalance(response.TotalRemaining)
 	return response.TotalRemaining, nil
@@ -231,12 +232,12 @@ func updateChannelAIGC2DBalance(channel *model.Channel) (float64, error) {
 	url := "https://api.aigc2d.com/dashboard/billing/credit_grants"
 	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "get AIGC2D balance response")
 	}
 	response := APGC2DGPTUsageResponse{}
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "unmarshal AIGC2D usage response")
 	}
 	channel.UpdateBalance(response.TotalAvailable)
 	return response.TotalAvailable, nil
@@ -246,19 +247,19 @@ func updateChannelSiliconFlowBalance(channel *model.Channel) (float64, error) {
 	url := "https://api.siliconflow.cn/v1/user/info"
 	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "get SiliconFlow balance response")
 	}
 	response := SiliconFlowUsageResponse{}
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "unmarshal SiliconFlow usage response")
 	}
 	if response.Code != 20000 {
 		return 0, errors.Errorf("code: %d, message: %s", response.Code, response.Message)
 	}
 	balance, err := strconv.ParseFloat(response.Data.TotalBalance, 64)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "parse SiliconFlow total balance")
 	}
 	channel.UpdateBalance(balance)
 	return balance, nil
@@ -268,12 +269,12 @@ func updateChannelDeepSeekBalance(channel *model.Channel) (float64, error) {
 	url := "https://api.deepseek.com/user/balance"
 	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "get DeepSeek balance response")
 	}
 	response := DeepSeekUsageResponse{}
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "unmarshal DeepSeek usage response")
 	}
 	index := -1
 	for i, balanceInfo := range response.BalanceInfos {
@@ -287,7 +288,7 @@ func updateChannelDeepSeekBalance(channel *model.Channel) (float64, error) {
 	}
 	balance, err := strconv.ParseFloat(response.BalanceInfos[index].TotalBalance, 64)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "parse DeepSeek total balance")
 	}
 	channel.UpdateBalance(balance)
 	return balance, nil
@@ -297,12 +298,12 @@ func updateChannelOpenRouterBalance(channel *model.Channel) (float64, error) {
 	url := "https://openrouter.ai/api/v1/credits"
 	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "get OpenRouter balance response")
 	}
 	response := OpenRouterResponse{}
 	err = json.Unmarshal(body, &response)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "unmarshal OpenRouter credits response")
 	}
 	balance := response.Data.TotalCredits - response.Data.TotalUsage
 	channel.UpdateBalance(balance)
@@ -348,12 +349,12 @@ func updateChannelBalance(channel *model.Channel) (float64, error) {
 
 	body, err := GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "get OpenAI subscription response")
 	}
 	subscription := OpenAISubscriptionResponse{}
 	err = json.Unmarshal(body, &subscription)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "unmarshal OpenAI subscription response")
 	}
 	now := time.Now()
 	startDate := fmt.Sprintf("%s-01", now.Format("2006-01"))
@@ -364,12 +365,12 @@ func updateChannelBalance(channel *model.Channel) (float64, error) {
 	url = fmt.Sprintf("%s/v1/dashboard/billing/usage?start_date=%s&end_date=%s", baseURL, startDate, endDate)
 	body, err = GetResponseBody("GET", url, channel, GetAuthHeader(channel.Key))
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "get OpenAI usage response")
 	}
 	usage := OpenAIUsageResponse{}
 	err = json.Unmarshal(body, &usage)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "unmarshal OpenAI usage response")
 	}
 	balance := subscription.HardLimitUSD - usage.TotalUsage/100
 	channel.UpdateBalance(balance)
@@ -378,28 +379,19 @@ func updateChannelBalance(channel *model.Channel) (float64, error) {
 
 // UpdateChannelBalance refreshes the balance information for the specified channel and returns the result.
 func UpdateChannelBalance(c *gin.Context) {
-	id, err := strconv.Atoi(c.Param("id"))
+	id, err := resolveChannelRef(c.Param("id"))
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		helper.RespondError(c, err)
 		return
 	}
 	channel, err := model.GetChannelById(id, true)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		helper.RespondError(c, err)
 		return
 	}
 	balance, err := updateChannelBalance(channel)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		helper.RespondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{

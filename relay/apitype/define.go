@@ -27,6 +27,10 @@ const (
 	XAI
 	OpenRouter
 	Copilot
+	Fireworks
+	NVIDIA
+	Cerebras
+	Azure
 
 	Dummy // this one is only for count, do not add any channel after this
 )

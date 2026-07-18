@@ -6,6 +6,8 @@ import { renderGroup, renderNumber, renderQuota } from '../helpers/render';
 import AddUser from '../pages/User/AddUser';
 import EditUser from '../pages/User/EditUser';
 
+const userRef = (user) => user?.uuid || user?.id || '';
+
 function renderRole(role) {
   switch (role) {
     case 1:
@@ -21,9 +23,11 @@ function renderRole(role) {
 
 const UsersTable = () => {
   const columns = [{
-    title: 'ID', dataIndex: 'id'
-  }, {
-    title: '用户名', dataIndex: 'username'
+    title: '用户名', dataIndex: 'username', render: (text, record) => (
+      <Tooltip content={`ID: ${userRef(record)}`}>
+        <span className="resource-name-with-id">{text}</span>
+      </Tooltip>
+    )
   }, {
     title: '分组', dataIndex: 'group', render: (text, record, index) => {
       return (<div>
@@ -119,7 +123,7 @@ const UsersTable = () => {
         position={'left'}
         onConfirm={() => {
           manageUser(record.username, 'delete', record).then(() => {
-            removeRecord(record.id);
+            removeRecord(userRef(record));
           });
         }}
       >
@@ -137,7 +141,7 @@ const UsersTable = () => {
   const [showAddUser, setShowAddUser] = useState(false);
   const [showEditUser, setShowEditUser] = useState(false);
   const [editingUser, setEditingUser] = useState({
-    id: undefined
+    uuid: undefined
   });
   const [orderBy, setOrderBy] = useState('');
   const [dropdownVisible, setDropdownVisible] = useState(false);
@@ -154,7 +158,7 @@ const UsersTable = () => {
     console.log(key);
     let newDataSource = [...users];
     if (key != null) {
-      let idx = newDataSource.findIndex(data => data.id === key);
+      let idx = newDataSource.findIndex(data => userRef(data) === key);
 
       if (idx > -1) {
         newDataSource.splice(idx, 1);
@@ -267,7 +271,7 @@ const UsersTable = () => {
     sortedUsers.sort((a, b) => {
       return ('' + a[key]).localeCompare(b[key]);
     });
-    if (sortedUsers[0].id === users[0].id) {
+    if (userRef(sortedUsers[0]) === userRef(users[0])) {
       sortedUsers.reverse();
     }
     setUsers(sortedUsers);
@@ -292,7 +296,7 @@ const UsersTable = () => {
   const closeEditUser = () => {
     setShowEditUser(false);
     setEditingUser({
-      id: undefined
+      uuid: undefined
     });
   };
 
@@ -334,7 +338,7 @@ const UsersTable = () => {
           icon="search"
           field="keyword"
           iconPosition="left"
-          placeholder="搜索用户的 ID，用户名，显示名称，以及邮箱地址 ..."
+          placeholder="搜索用户的 ID，UUID，用户名，显示名称，以及邮箱地址 ..."
           value={searchKeyword}
           loading={searching}
           onChange={value => handleKeywordChange(value)}

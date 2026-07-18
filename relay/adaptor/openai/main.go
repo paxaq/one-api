@@ -8,25 +8,27 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Laisky/errors/v2"
 	gmw "github.com/Laisky/gin-middlewares/v7"
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/conv"
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/common/render"
-	commonsse "github.com/songquanpeng/one-api/common/sse"
-	"github.com/songquanpeng/one-api/common/tracing"
-	relaymodel "github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai_compatible"
-	metalib "github.com/songquanpeng/one-api/relay/meta"
-	"github.com/songquanpeng/one-api/relay/model"
-	"github.com/songquanpeng/one-api/relay/pricing"
-	"github.com/songquanpeng/one-api/relay/relaymode"
-	"github.com/songquanpeng/one-api/relay/streaming"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/conv"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/common/render"
+	commonsse "github.com/Laisky/one-api/common/sse"
+	"github.com/Laisky/one-api/common/tracing"
+	relaymodel "github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/adaptor/common/toolnamesafe"
+	"github.com/Laisky/one-api/relay/adaptor/openai_compatible"
+	metalib "github.com/Laisky/one-api/relay/meta"
+	"github.com/Laisky/one-api/relay/model"
+	"github.com/Laisky/one-api/relay/pricing"
+	"github.com/Laisky/one-api/relay/relaymode"
+	"github.com/Laisky/one-api/relay/streaming"
 )
 
 var errUpstreamEmbeddingResponse = errors.New("upstream embedding response error")
@@ -163,6 +165,12 @@ streamLoop:
 
 				if len(streamResponse.Choices) == 0 && streamResponse.Usage == nil {
 					continue
+				}
+
+				for i := range streamResponse.Choices {
+					if toolnamesafe.RestoreToolCallNames(c, streamResponse.Choices[i].Delta.ToolCalls) {
+						lg.Debug("restored sanitized tool names in oversized stream chunk")
+					}
 				}
 
 				for _, choice := range streamResponse.Choices {
@@ -311,6 +319,19 @@ streamLoop:
 				continue
 			}
 
+			// Restore any sanitized tool names back to client-facing originals
+			// before forwarding. The normal path emits raw upstream JSON, so we
+			// only re-marshal when a rename actually happened.
+			toolNamesRestored := false
+			for i := range streamResponse.Choices {
+				if toolnamesafe.RestoreToolCallNames(c, streamResponse.Choices[i].Delta.ToolCalls) {
+					toolNamesRestored = true
+				}
+			}
+			if toolNamesRestored {
+				lg.Debug("restored sanitized tool names in stream chunk")
+			}
+
 			// Process each choice in the response
 			for _, choice := range streamResponse.Choices {
 				// Extract reasoning content from different possible fields
@@ -360,8 +381,19 @@ streamLoop:
 			}
 
 			if !handledByRewriter {
-				// Send the processed data to the client
-				render.StringData(c, data)
+				if toolNamesRestored {
+					payload, err := json.Marshal(streamResponse)
+					if err != nil {
+						lg.Error("marshalling stream response after tool name restore",
+							zap.Error(err))
+						render.StringData(c, data)
+					} else {
+						render.StringData(c, "data: "+string(payload))
+					}
+				} else {
+					// Send the processed data to the client
+					render.StringData(c, data)
+				}
 			}
 
 			// Update usage information if available
@@ -419,6 +451,11 @@ streamLoop:
 	if streamErr != nil && trackerErr == nil {
 		render.LogHeartbeatLineReaderError(c, lg, streamErr, hbr)
 	}
+
+	// Promote any top-level cached_tokens into the nested
+	// prompt_tokens_details.cached_tokens field so downstream billing applies
+	// the cache-hit ratio. No-op for OpenAI-shaped responses.
+	usage.NormalizeCachedTokens()
 
 	// Let the streamRewriter finalize if present, but do NOT fabricate a
 	// [DONE] when the upstream didn't send one — be an honest proxy.
@@ -552,6 +589,7 @@ func Handler(c *gin.Context, resp *http.Response, promptTokens int, modelName st
 
 	// Process reasoning content in each choice
 	reasoningFormat := c.Query("reasoning_format")
+	toolNamesRestored := false
 	for i := range textResponse.Choices {
 		choice := &textResponse.Choices[i]
 		reasoningContent := processReasoningContent(choice)
@@ -560,6 +598,14 @@ func Handler(c *gin.Context, resp *http.Response, promptTokens int, modelName st
 		if reasoningContent != "" {
 			choice.SetReasoningContent(reasoningFormat, reasoningContent)
 		}
+
+		// Restore any sanitized tool names back to client-facing originals.
+		if toolnamesafe.RestoreToolCallNames(c, choice.ToolCalls) {
+			toolNamesRestored = true
+		}
+	}
+	if toolNamesRestored {
+		logger.Debug("restored sanitized tool names in non-stream response")
 	}
 
 	// Check if this is a Claude Messages conversion - if so, don't write response here
@@ -800,6 +846,11 @@ func calculateTokenUsage(response *SlimTextResponse, promptTokens int, modelName
 		// Handle audio tokens conversion
 		calculateAudioTokens(response, modelName)
 	}
+
+	// Promote any top-level cached_tokens into the nested
+	// prompt_tokens_details.cached_tokens field so downstream billing applies
+	// the cache-hit ratio. No-op for OpenAI-shaped responses.
+	response.Usage.NormalizeCachedTokens()
 }
 
 // Helper function to check if response has audio tokens
@@ -811,7 +862,7 @@ func hasAudioTokens(response *SlimTextResponse) bool {
 // Helper function to calculate audio token usage
 func calculateAudioTokens(response *SlimTextResponse, modelName string) {
 	// Convert audio tokens for prompt
-	audioCfg, found := pricing.ResolveAudioPricing(modelName, nil, &Adaptor{})
+	audioCfg, found := pricing.ResolveAudioPricing(modelName, nil, &Adaptor{}, time.Time{})
 	promptRatio := pricing.DefaultAudioPromptRatio
 	completionRatio := pricing.DefaultAudioCompletionRatio
 	if found && audioCfg != nil {
@@ -907,6 +958,18 @@ func ResponseAPIHandler(c *gin.Context, resp *http.Response, promptTokens int, m
 		if choice.Message.Reasoning != nil && *choice.Message.Reasoning != "" {
 			choice.Message.SetReasoningContent(c.Query("reasoning_format"), *choice.Message.Reasoning)
 		}
+	}
+
+	// Restore any sanitized tool names so the client receives the original
+	// identifiers it submitted (no-op when no sanitization happened).
+	toolNamesRestored := false
+	for i := range chatCompletionResp.Choices {
+		if toolnamesafe.RestoreToolCallNames(c, chatCompletionResp.Choices[i].Message.ToolCalls) {
+			toolNamesRestored = true
+		}
+	}
+	if toolNamesRestored {
+		lg.Debug("restored sanitized tool names in Response API non-stream response")
 	}
 
 	// Set usage - prioritize API-provided usage, but fallback to calculation if needed
@@ -1082,7 +1145,7 @@ func ResponseAPIStreamHandler(c *gin.Context, resp *http.Response, relayMode int
 						if streamEvent.OutputIndex >= 0 {
 							state.setIndex(streamEvent.OutputIndex)
 						}
-						state.setName(streamEvent.Item.Name)
+						state.setName(toolnamesafe.RestoreToolName(c, streamEvent.Item.Name))
 						if streamEvent.Item.Arguments != "" {
 							state.appendArgs(streamEvent.Item.Arguments)
 						}
@@ -1436,7 +1499,7 @@ func ResponseAPIStreamHandler(c *gin.Context, resp *http.Response, relayMode int
 					if streamEvent.OutputIndex >= 0 {
 						state.setIndex(streamEvent.OutputIndex)
 					}
-					state.setName(streamEvent.Item.Name)
+					state.setName(toolnamesafe.RestoreToolName(c, streamEvent.Item.Name))
 					if streamEvent.Item.Arguments != "" {
 						state.appendArgs(streamEvent.Item.Arguments)
 					}

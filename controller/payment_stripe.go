@@ -15,9 +15,9 @@ import (
 	checkoutsession "github.com/stripe/stripe-go/v82/checkout/session"
 	stripewebhook "github.com/stripe/stripe-go/v82/webhook"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/model"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/model"
 )
 
 type createStripeCheckoutRequest struct {

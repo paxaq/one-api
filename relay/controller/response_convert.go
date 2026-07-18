@@ -9,11 +9,11 @@ import (
 	"github.com/Laisky/errors/v2"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai_compatible"
-	metalib "github.com/songquanpeng/one-api/relay/meta"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/relay/adaptor/openai"
+	"github.com/Laisky/one-api/relay/adaptor/openai_compatible"
+	metalib "github.com/Laisky/one-api/relay/meta"
+	relaymodel "github.com/Laisky/one-api/relay/model"
 )
 
 // renderChatResponseAsResponseAPI renders a Chat Completion response as a Response API response
@@ -30,7 +30,7 @@ func renderChatResponseAsResponseAPI(c *gin.Context, status int, textResp *opena
 		Object:             "response",
 		CreatedAt:          time.Now().Unix(),
 		Status:             statusText,
-		Model:              meta.ActualModelName,
+		Model:              userVisibleModelName(meta, originalReq.Model),
 		Output:             output,
 		Usage:              usage,
 		Instructions:       originalReq.Instructions,
@@ -47,6 +47,9 @@ func renderChatResponseAsResponseAPI(c *gin.Context, status int, textResp *opena
 		TopP:               originalReq.TopP,
 		Truncation:         originalReq.Truncation,
 		User:               originalReq.User,
+	}
+	if response.Model == "" && meta != nil {
+		response.Model = meta.ActualModelName
 	}
 
 	if len(toolCalls) > 0 {
@@ -97,9 +100,11 @@ func deriveResponseStatus(choices []openai_compatible.TextResponseChoice) (strin
 	return status, nil
 }
 
-// buildResponseOutput builds the output items for a Response API response from Chat Completion choices
+// buildResponseOutput builds the output items for a Response API response from Chat Completion choices.
+// The returned slice is always non-nil so that JSON serialization yields "output": [] instead of null,
+// which strict OpenAI SDK clients reject as a violation of the Responses API schema.
 func buildResponseOutput(choices []openai_compatible.TextResponseChoice) []openai.OutputItem {
-	var output []openai.OutputItem
+	output := make([]openai.OutputItem, 0)
 	for _, choice := range choices {
 		msg := choice.Message
 		contents := convertMessageContent(msg)

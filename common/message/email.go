@@ -17,7 +17,7 @@ import (
 
 	"github.com/Laisky/errors/v2"
 
-	"github.com/songquanpeng/one-api/common/config"
+	"github.com/Laisky/one-api/common/config"
 )
 
 // ResendEmailRequest is the JSON body sent to POST https://api.resend.com/emails.

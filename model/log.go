@@ -13,36 +13,45 @@ import (
 	"github.com/Laisky/zap"
 	"gorm.io/gorm"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/helper"
-	"github.com/songquanpeng/one-api/common/logger"
-	"github.com/songquanpeng/one-api/dto"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/helper"
+	"github.com/Laisky/one-api/common/logger"
+	"github.com/Laisky/one-api/dto"
 )
 
 // Log represents a persisted usage or management entry emitted by the billing pipeline.
 type Log struct {
-	Id                int    `json:"id"`
-	UserId            int    `json:"user_id" gorm:"index;index:idx_user_token,priority:1"`
-	CreatedAt         int64  `json:"created_at" gorm:"bigint;index:idx_created_at_type"`
-	Type              int    `json:"type" gorm:"index:idx_created_at_type"`
-	Content           string `json:"content" gorm:"type:text"`
-	Username          string `json:"username" gorm:"index:index_username_model_name,priority:2;default:''"`
-	TokenName         string `json:"token_name" gorm:"index;index:idx_user_token,priority:2;default:''"`
-	ModelName         string `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
-	Quota             int    `json:"quota" gorm:"default:0;index"`             // Added index for sorting
-	PromptTokens      int    `json:"prompt_tokens" gorm:"default:0;index"`     // Added index for sorting
-	CompletionTokens  int    `json:"completion_tokens" gorm:"default:0;index"` // Added index for sorting
-	ChannelId         int    `json:"channel" gorm:"index"`
-	RequestId         string `json:"request_id" gorm:"default:''"`
-	TraceId           string `json:"trace_id" gorm:"type:varchar(64);index;default:''"` // TraceID from gin-middlewares
-	UpdatedAt         int64  `json:"updated_at" gorm:"bigint;autoUpdateTime:milli"`
-	ElapsedTime       int64  `json:"elapsed_time" gorm:"default:0;index"` // Added index for sorting (unit is ms)
-	IsStream          bool   `json:"is_stream" gorm:"default:false"`
-	SystemPromptReset bool   `json:"system_prompt_reset" gorm:"default:false"`
-	// Cached token counts (prompt/output) for cost transparency
-	CachedPromptTokens     int `json:"cached_prompt_tokens" gorm:"default:0;index"`
-	CachedCompletionTokens int `json:"cached_completion_tokens" gorm:"default:0;index"`
+	Id        int     `json:"id"`
+	UserId    int     `json:"user_id" gorm:"index;index:idx_user_token,priority:1"`
+	UUID      string  `json:"uuid" gorm:"type:char(36);column:uuid"`
+	UserUUID  *string `json:"user_uuid" gorm:"type:char(36);column:user_uuid;index"`
+	CreatedAt int64   `json:"created_at" gorm:"bigint;index:idx_created_at_type"`
+	Type      int     `json:"type" gorm:"index:idx_created_at_type"`
+	Content   string  `json:"content" gorm:"type:text"`
+	Username  string  `json:"username" gorm:"index:index_username_model_name,priority:2;default:''"`
+	TokenName string  `json:"token_name" gorm:"index;index:idx_user_token,priority:2;default:''"`
+	TokenUUID *string `json:"token_uuid" gorm:"type:char(36);column:token_uuid;index"`
+	ModelName string  `json:"model_name" gorm:"index;index:index_username_model_name,priority:1;default:''"`
+	// OriginModelName records the model name as requested by the client before any mapping.
+	// When a channel has model mapping configured (e.g., "my-model" -> "gpt-4"),
+	// this field preserves the original model name requested ("my-model") while ModelName
+	// holds the mapped model used for billing ("gpt-4").
+	OriginModelName   string  `json:"origin_model_name" gorm:"index;default:''"`
+	Quota             int     `json:"quota" gorm:"default:0;index"`             // Added index for sorting
+	PromptTokens      int     `json:"prompt_tokens" gorm:"default:0;index"`     // Added index for sorting
+	CompletionTokens  int     `json:"completion_tokens" gorm:"default:0;index"` // Added index for sorting
+	ChannelId         int     `json:"channel" gorm:"index"`
+	ChannelUUID       *string `json:"channel_uuid" gorm:"type:char(36);column:channel_uuid;index"`
+	ChannelName       string  `json:"channel_name,omitempty" gorm:"-"`
+	RequestId         string  `json:"request_id" gorm:"default:''"`
+	TraceId           string  `json:"trace_id" gorm:"type:varchar(64);index;default:''"` // TraceID from gin-middlewares
+	UpdatedAt         int64   `json:"updated_at" gorm:"bigint;autoUpdateTime:milli"`
+	ElapsedTime       int64   `json:"elapsed_time" gorm:"default:0;index"` // Added index for sorting (unit is ms)
+	IsStream          bool    `json:"is_stream" gorm:"default:false"`
+	SystemPromptReset bool    `json:"system_prompt_reset" gorm:"default:false"`
+	// Cached prompt tokens for cost transparency.
+	CachedPromptTokens int `json:"cached_prompt_tokens" gorm:"default:0;index"`
 	// Metadata holds provider-specific attributes serialized as JSON (e.g., cache write tokens).
 	Metadata LogMetadata `json:"metadata,omitempty" gorm:"type:text"`
 }
@@ -51,6 +60,64 @@ type Log struct {
 // It is serialized as JSON in the underlying database column to avoid schema churn when
 // new adaptor-specific fields appear.
 type LogMetadata map[string]any
+
+// SetLogExternalUUIDs copies external UUIDs onto a log when they are available.
+// Parameters:
+//   - log: log row being prepared for persistence.
+//   - userUUID: external UUID of the user associated with the log.
+//   - channelUUID: external UUID of the channel associated with the log.
+//   - tokenUUID: optional external UUID of the token associated with the log.
+//
+// Return values: none.
+func SetLogExternalUUIDs(log *Log, userUUID string, channelUUID string, tokenUUID ...string) {
+	if log == nil {
+		return
+	}
+	if userUUID != "" {
+		log.UserUUID = &userUUID
+	}
+	if channelUUID != "" {
+		log.ChannelUUID = &channelUUID
+	}
+	if len(tokenUUID) > 0 && tokenUUID[0] != "" {
+		log.TokenUUID = &tokenUUID[0]
+	}
+}
+
+// FillLogUserUUIDByID fills log.UserUUID from log.UserId when it is missing.
+// Parameters:
+//   - ctx: context used for structured warning logs.
+//   - log: log row being prepared for persistence.
+//
+// Return values: none. Lookup failures are logged and the log remains writable.
+func FillLogUserUUIDByID(ctx context.Context, log *Log) {
+	if log == nil || log.UserUUID != nil || log.UserId <= 0 {
+		return
+	}
+	userUUID, err := GetUserUUIDByID(log.UserId)
+	if err != nil {
+		logger.FromContext(ctx).Warn("failed to fill log user uuid",
+			zap.Int("user_id", log.UserId),
+			zap.Error(err))
+		return
+	}
+	if userUUID != "" {
+		log.UserUUID = &userUUID
+	}
+}
+
+// StringPtrIfNotEmpty returns a pointer to value when value is non-empty.
+// Parameters:
+//   - value: candidate string value.
+//
+// Return values:
+//   - *string: pointer to value, or nil when value is empty.
+func StringPtrIfNotEmpty(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
 
 // logSortFields enumerates whitelisted columns for log sorting.
 var logSortFields = map[string]string{
@@ -70,11 +137,15 @@ const (
 	LogMetadataKeyCacheWrite5m = "ephemeral_5m"
 	// LogMetadataKeyCacheWrite1h records the count of 1-hour window cache write tokens.
 	LogMetadataKeyCacheWrite1h = "ephemeral_1h"
-	// LogMetadataKeyToolUsage stores structured metadata about built-in tool usage and charges.
-	LogMetadataKeyToolUsage = "tool_usage"
 	// LogMetadataKeyProvisional marks a consume log entry as provisional (pre-consumed, awaiting reconciliation).
 	// Post-billing removes this flag when the log is reconciled with actual usage.
 	LogMetadataKeyProvisional = "provisional"
+	// LogMetadataKeyUserAPIFormat records the API format the end-user requested (e.g. "chat", "response_api").
+	LogMetadataKeyUserAPIFormat = "user_api_format"
+	// LogMetadataKeyUpstreamAPIFormat records the upstream provider's API format (e.g. "openai", "anthropic").
+	LogMetadataKeyUpstreamAPIFormat = "upstream_api_format"
+	// LogMetadataKeyUpstreamEndpoint records the final URL sent to the upstream provider.
+	LogMetadataKeyUpstreamEndpoint = "upstream_endpoint"
 )
 
 // ToolUsageEntry captures per-tool usage metadata for logging.
@@ -92,6 +163,21 @@ type ToolUsageSummary struct {
 	Counts     map[string]int   // Invocation counts per tool
 	CostByTool map[string]int64 // Quota charged per tool
 	Entries    []ToolUsageEntry // Optional detailed entries
+}
+
+// MarshalJSON renders an empty JSON object when the map is nil.
+//
+// Why: Scan leaves nil on NULL/empty columns; without this, default reflection
+// emits JSON null which strict clients reject.
+func (m LogMetadata) MarshalJSON() ([]byte, error) {
+	if m == nil {
+		return []byte("{}"), nil
+	}
+	payload, err := json.Marshal(map[string]any(m))
+	if err != nil {
+		return nil, errors.Wrap(err, "marshal log metadata")
+	}
+	return payload, nil
 }
 
 // Value converts LogMetadata to a driver-compatible JSON representation.
@@ -186,50 +272,6 @@ func AppendCacheWriteTokensMetadata(metadata LogMetadata, cacheWrite5m, cacheWri
 	return metadata
 }
 
-// AppendToolUsageMetadata attaches tool invocation details to the metadata map when present.
-func AppendToolUsageMetadata(metadata LogMetadata, summary *ToolUsageSummary) LogMetadata {
-	if summary == nil {
-		return metadata
-	}
-	if summary.TotalCost == 0 && len(summary.Counts) == 0 && len(summary.CostByTool) == 0 {
-		return metadata
-	}
-	if metadata == nil {
-		metadata = LogMetadata{}
-	}
-
-	entry := make(map[string]any, 3)
-	if summary.TotalCost != 0 {
-		entry["total_cost"] = summary.TotalCost
-	}
-	if len(summary.Counts) > 0 {
-		countsCopy := make(map[string]int, len(summary.Counts))
-		maps.Copy(countsCopy, summary.Counts)
-		entry["counts"] = countsCopy
-	}
-	if len(summary.CostByTool) > 0 {
-		costCopy := make(map[string]int64, len(summary.CostByTool))
-		maps.Copy(costCopy, summary.CostByTool)
-		entry["cost_by_tool"] = costCopy
-	}
-	if len(summary.Entries) > 0 {
-		entries := make([]map[string]any, 0, len(summary.Entries))
-		for _, item := range summary.Entries {
-			entries = append(entries, map[string]any{
-				"tool":      item.Tool,
-				"source":    item.Source,
-				"server_id": item.ServerID,
-				"count":     item.Count,
-				"cost":      item.Cost,
-			})
-		}
-		entry["entries"] = entries
-	}
-
-	metadata[LogMetadataKeyToolUsage] = entry
-	return metadata
-}
-
 const (
 	// LogTypeUnknown denotes an unspecified log category and should only appear in migration edge cases.
 	LogTypeUnknown = iota
@@ -246,6 +288,12 @@ const (
 	// LogTypeProvisional marks a pre-consumed quota log entry that is awaiting
 	// post-billing reconciliation. Once reconciled, the type is changed to LogTypeConsume.
 	LogTypeProvisional
+	// LogTypeTool records a single built-in or external tool invocation as its
+	// own row, separate from the model billing row. ModelName carries the tool
+	// identifier (e.g. "web_search", "mcp", "extract_key_info") and Quota is
+	// the cost charged for that invocation. Dashboard tool charts aggregate
+	// strictly on this type.
+	LogTypeTool
 )
 
 const manageLogRedactedPlaceholder = "[REDACTED]"
@@ -487,6 +535,7 @@ func RecordLog(ctx context.Context, userId int, logType int, content string) {
 		Type:      logType,
 		Content:   content,
 	}
+	FillLogUserUUIDByID(ctx, log)
 	recordLogHelper(ctx, log)
 }
 
@@ -501,6 +550,7 @@ func RecordLogWithIDs(ctx context.Context, userId int, logType int, content stri
 		RequestId: requestId,
 		TraceId:   traceId,
 	}
+	FillLogUserUUIDByID(ctx, log)
 	recordLogHelper(ctx, log)
 }
 
@@ -513,6 +563,7 @@ func RecordManageLog(ctx context.Context, userId int, field string, previous any
 		Type:      LogTypeManage,
 		Content:   buildManageLogContent(field, previous, next, note),
 	}
+	FillLogUserUUIDByID(ctx, log)
 	recordLogHelper(ctx, log)
 }
 
@@ -526,6 +577,7 @@ func RecordTopupLog(ctx context.Context, userId int, content string, quota int) 
 		Content:   content,
 		Quota:     quota,
 	}
+	FillLogUserUUIDByID(ctx, log)
 	recordLogHelper(ctx, log)
 }
 
@@ -541,6 +593,7 @@ func RecordTopupLogWithIDs(ctx context.Context, userId int, content string, quot
 		RequestId: requestId,
 		TraceId:   traceId,
 	}
+	FillLogUserUUIDByID(ctx, log)
 	recordLogHelper(ctx, log)
 }
 
@@ -553,6 +606,121 @@ func RecordConsumeLog(ctx context.Context, log *Log) {
 	log.CreatedAt = helper.GetTimestamp()
 	log.Type = LogTypeConsume
 	recordLogHelper(ctx, log)
+}
+
+// RecordToolLog stores a single tool invocation log entry. It is used when the
+// caller already has fully formed billing details for one invocation (for
+// example the external `/api/token/consume` endpoint). The log row carries the
+// tool identifier in ModelName and the charged quota in Quota.
+func RecordToolLog(ctx context.Context, log *Log) {
+	if !config.IsLogConsumeEnabled() {
+		return
+	}
+	log.Username = GetUsernameById(log.UserId)
+	log.CreatedAt = helper.GetTimestamp()
+	log.Type = LogTypeTool
+	recordLogHelper(ctx, log)
+}
+
+// RecordToolLogs emits one LogTypeTool row per tool invocation captured in the
+// provided summary. Billing/audit fields are inherited from base, but
+// model-specific fields (model_name, quota, prompt/completion tokens) are
+// overwritten on each row to reflect the per-invocation tool data.
+//
+// When summary.CostByTool[tool] is set, that value is the total quota for the
+// tool in this request and is split evenly across the count rows; the first
+// row absorbs any rounding remainder so the per-tool sum is preserved exactly.
+// When CostByTool is missing for a tool, rows are written with quota=0.
+//
+// The base.ModelName (the chat model that triggered the tools) is preserved
+// on every emitted row as OriginModelName so dashboards can correlate tool
+// invocations back to the originating model.
+func RecordToolLogs(ctx context.Context, base *Log, summary *ToolUsageSummary) {
+	if !config.IsLogConsumeEnabled() {
+		return
+	}
+	if base == nil || summary == nil {
+		return
+	}
+	if len(summary.Counts) == 0 && len(summary.CostByTool) == 0 {
+		return
+	}
+
+	now := helper.GetTimestamp()
+	username := base.Username
+	if username == "" {
+		username = GetUsernameById(base.UserId)
+	}
+
+	// Build the unique tool name set from both Counts and CostByTool so a
+	// tool that has cost but no count (or vice versa) still gets one row.
+	tools := map[string]struct{}{}
+	for tool := range summary.Counts {
+		if strings.TrimSpace(tool) != "" {
+			tools[tool] = struct{}{}
+		}
+	}
+	for tool := range summary.CostByTool {
+		if strings.TrimSpace(tool) != "" {
+			tools[tool] = struct{}{}
+		}
+	}
+
+	originModelName := base.OriginModelName
+	if originModelName == "" {
+		originModelName = base.ModelName
+	}
+
+	lg := logger.FromContext(ctx)
+	for tool := range tools {
+		count := summary.Counts[tool]
+		if count <= 0 {
+			count = 1
+		}
+		totalCost := summary.CostByTool[tool]
+		perCall := int64(0)
+		remainder := int64(0)
+		if count > 0 {
+			perCall = totalCost / int64(count)
+			remainder = totalCost % int64(count)
+		}
+
+		for i := 0; i < count; i++ {
+			rowQuota := perCall
+			if i == 0 {
+				rowQuota += remainder
+			}
+			row := &Log{
+				UserId:          base.UserId,
+				UserUUID:        base.UserUUID,
+				Username:        username,
+				CreatedAt:       now,
+				Type:            LogTypeTool,
+				Content:         fmt.Sprintf("Tool invocation: %s", tool),
+				TokenName:       base.TokenName,
+				TokenUUID:       base.TokenUUID,
+				ModelName:       tool,
+				OriginModelName: originModelName,
+				Quota:           int(rowQuota),
+				ChannelId:       base.ChannelId,
+				ChannelUUID:     base.ChannelUUID,
+				RequestId:       base.RequestId,
+				TraceId:         base.TraceId,
+				ElapsedTime:     base.ElapsedTime,
+				IsStream:        false,
+			}
+			ensureLogContent(row)
+			if err := LOG_DB.Create(row).Error; err != nil {
+				lg.Error("failed to record tool log",
+					zap.Error(err),
+					zap.Int("user_id", base.UserId),
+					zap.String("tool", tool),
+					zap.Int64("quota", rowQuota),
+					zap.String("request_id", base.RequestId),
+				)
+			}
+		}
+	}
 }
 
 // RecordProvisionalConsumeLog creates a consume log entry at pre-consume time
@@ -616,14 +784,13 @@ func RecordProvisionalConsumeLog(ctx context.Context, log *Log, estimatedQuota i
 // ConsumeLogReconcileDetail captures the finalized fields written back into a
 // provisional consume log during post-billing reconciliation.
 type ConsumeLogReconcileDetail struct {
-	FinalQuota             int64
-	Content                string
-	PromptTokens           int
-	CompletionTokens       int
-	CachedPromptTokens     int
-	CachedCompletionTokens int
-	ElapsedTime            int64
-	Metadata               LogMetadata
+	FinalQuota         int64
+	Content            string
+	PromptTokens       int
+	CompletionTokens   int
+	CachedPromptTokens int
+	ElapsedTime        int64
+	Metadata           LogMetadata
 }
 
 // ReconcileConsumeLog updates a provisional consume log entry with the final
@@ -658,14 +825,13 @@ func ReconcileConsumeLogDetailed(ctx context.Context, logID int, detail ConsumeL
 	}
 
 	updates := map[string]any{
-		"type":                     LogTypeConsume,
-		"quota":                    int(detail.FinalQuota),
-		"content":                  detail.Content,
-		"prompt_tokens":            detail.PromptTokens,
-		"completion_tokens":        detail.CompletionTokens,
-		"cached_prompt_tokens":     detail.CachedPromptTokens,
-		"cached_completion_tokens": detail.CachedCompletionTokens,
-		"elapsed_time":             detail.ElapsedTime,
+		"type":                 LogTypeConsume,
+		"quota":                int(detail.FinalQuota),
+		"content":              detail.Content,
+		"prompt_tokens":        detail.PromptTokens,
+		"completion_tokens":    detail.CompletionTokens,
+		"cached_prompt_tokens": detail.CachedPromptTokens,
+		"elapsed_time":         detail.ElapsedTime,
 	}
 
 	// Remove the provisional flag from metadata
@@ -699,7 +865,6 @@ func ReconcileConsumeLogDetailed(ctx context.Context, logID int, detail ConsumeL
 		zap.Int("prompt_tokens", detail.PromptTokens),
 		zap.Int("completion_tokens", detail.CompletionTokens),
 		zap.Int("cached_prompt_tokens", detail.CachedPromptTokens),
-		zap.Int("cached_completion_tokens", detail.CachedCompletionTokens),
 	)
 	return nil
 }
@@ -730,14 +895,13 @@ func RecordTestLogWithIDs(ctx context.Context, log *Log, requestId string, trace
 //
 // Returns an error if the update fails.
 var allowedConsumeLogUpdateFields = map[string]struct{}{
-	"quota":                    {},
-	"content":                  {},
-	"elapsed_time":             {},
-	"prompt_tokens":            {},
-	"completion_tokens":        {},
-	"cached_prompt_tokens":     {},
-	"cached_completion_tokens": {},
-	"metadata":                 {},
+	"quota":                {},
+	"content":              {},
+	"elapsed_time":         {},
+	"prompt_tokens":        {},
+	"completion_tokens":    {},
+	"cached_prompt_tokens": {},
+	"metadata":             {},
 }
 
 func UpdateConsumeLogByID(ctx context.Context, logID int, updates map[string]any) error {
@@ -799,7 +963,13 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 	} else {
 		err = tx.Order(orderClause).Limit(num).Offset(startIdx).Find(&logs).Error
 	}
-	return logs, err
+	if err != nil {
+		return nil, errors.Wrap(err, "get all logs")
+	}
+	if err := fillLogChannelNames(logs); err != nil {
+		return nil, errors.Wrap(err, "fill all log channel names")
+	}
+	return logs, nil
 }
 
 // GetAllLogsCount returns the total number of logs matching the supplied filters.
@@ -831,7 +1001,10 @@ func GetAllLogsCount(logType int, startTimestamp int64, endTimestamp int64, mode
 	tx = excludeProvisionalScope(tx)
 
 	err = tx.Model(&Log{}).Count(&count).Error
-	return count, err
+	if err != nil {
+		return 0, errors.Wrap(err, "count all logs")
+	}
+	return count, nil
 }
 
 // GetUserLogs lists logs belonging to a specific user with optional filtering and ordering.
@@ -865,7 +1038,13 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 	} else {
 		err = tx.Order(orderClause).Limit(num).Offset(startIdx).Find(&logs).Error
 	}
-	return logs, err
+	if err != nil {
+		return nil, errors.Wrapf(err, "get user %d logs", userId)
+	}
+	if err := fillLogChannelNames(logs); err != nil {
+		return nil, errors.Wrapf(err, "fill user %d log channel names", userId)
+	}
+	return logs, nil
 }
 
 // GetUserLogsCount provides the number of logs for a user that satisfy the given filters.
@@ -891,31 +1070,46 @@ func GetUserLogsCount(userId int, logType int, startTimestamp int64, endTimestam
 	tx = excludeProvisionalScope(tx)
 
 	err = tx.Model(&Log{}).Count(&count).Error
-	return count, err
+	if err != nil {
+		return 0, errors.Wrapf(err, "count user %d logs", userId)
+	}
+	return count, nil
 }
 
 // SearchAllLogs performs a keyword search across all log entries with pagination.
 func SearchAllLogs(keyword string, startIdx int, num int, sortBy string, sortOrder string) (logs []*Log, total int64, err error) {
 	db := excludeProvisionalScope(LOG_DB.Model(&Log{}))
 	if keyword != "" {
-		db = db.Where("content LIKE ?", "%"+keyword+"%")
+		db = db.Where("(content LIKE ? or uuid = ?)", "%"+keyword+"%", normalizeUUIDKeyword(keyword))
 	}
 	orderClause := GetLogOrderClause(sortBy, sortOrder)
 	db = db.Order(orderClause)
 	err = db.Count(&total).Limit(num).Offset(startIdx).Find(&logs).Error
-	return logs, total, err
+	if err != nil {
+		return nil, 0, errors.Wrap(err, "search all logs")
+	}
+	if err := fillLogChannelNames(logs); err != nil {
+		return nil, 0, errors.Wrap(err, "fill searched all log channel names")
+	}
+	return logs, total, nil
 }
 
 // SearchUserLogs searches logs owned by a specific user using a keyword filter.
 func SearchUserLogs(userId int, keyword string, startIdx int, num int, sortBy string, sortOrder string) (logs []*Log, total int64, err error) {
 	db := excludeProvisionalScope(LOG_DB.Model(&Log{}).Where("user_id = ?", userId))
 	if keyword != "" {
-		db = db.Where("content LIKE ?", "%"+keyword+"%")
+		db = db.Where("(content LIKE ? or uuid = ?)", "%"+keyword+"%", normalizeUUIDKeyword(keyword))
 	}
 	orderClause := GetLogOrderClause(sortBy, sortOrder)
 	db = db.Order(orderClause)
 	err = db.Count(&total).Limit(num).Offset(startIdx).Find(&logs).Error
-	return logs, total, err
+	if err != nil {
+		return nil, 0, errors.Wrapf(err, "search user %d logs", userId)
+	}
+	if err := fillLogChannelNames(logs); err != nil {
+		return nil, 0, errors.Wrapf(err, "fill searched user %d log channel names", userId)
+	}
+	return logs, total, nil
 }
 
 // SumUsedQuota aggregates quota consumption over matching logs, scoped by model, user, token, or channel.
@@ -1002,6 +1196,150 @@ func dayAggregationSelect() string {
 	return "DATE_FORMAT(FROM_UNIXTIME(created_at), '%Y-%m-%d') as day"
 }
 
+// SearchToolLogsByDayAndTool returns per-day, per-tool aggregates of tool
+// invocation logs (Type == LogTypeTool). request_count is the number of
+// invocations (one log row per invocation) and quota is the sum of the
+// charged quota.
+func SearchToolLogsByDayAndTool(userId, start, endExclusive int) ([]*dto.ToolLogStatistic, error) {
+	groupSelect := dayAggregationSelect()
+
+	var query string
+	var args []any
+
+	if userId == 0 {
+		query = `
+			SELECT ` + groupSelect + `,
+			COALESCE(model_name, '') as tool_name,
+			count(1) as request_count,
+			COALESCE(sum(quota), 0) as quota
+			FROM logs
+			WHERE type = ?
+			AND created_at >= ? AND created_at < ?
+			GROUP BY day, tool_name
+			ORDER BY day, tool_name
+		`
+		args = []any{LogTypeTool, start, endExclusive}
+	} else {
+		query = `
+			SELECT ` + groupSelect + `,
+			COALESCE(model_name, '') as tool_name,
+			count(1) as request_count,
+			COALESCE(sum(quota), 0) as quota
+			FROM logs
+			WHERE type = ?
+			AND user_id = ?
+			AND created_at >= ? AND created_at < ?
+			GROUP BY day, tool_name
+			ORDER BY day, tool_name
+		`
+		args = []any{LogTypeTool, userId, start, endExclusive}
+	}
+
+	var stats []*dto.ToolLogStatistic
+	if err := LOG_DB.Raw(query, args...).Scan(&stats).Error; err != nil {
+		return nil, errors.Wrap(err, "search tool logs by day and tool")
+	}
+	return stats, nil
+}
+
+// SearchToolLogsByDayAndUser returns per-day, per-user aggregates of tool
+// invocation logs (Type == LogTypeTool).
+func SearchToolLogsByDayAndUser(userId, start, endExclusive int) ([]*dto.ToolLogStatisticByUser, error) {
+	groupSelect := dayAggregationSelect()
+
+	var query string
+	var args []any
+
+	if userId == 0 {
+		query = `
+			SELECT ` + groupSelect + `,
+			COALESCE(username, '') as username,
+			user_id,
+			COALESCE(user_uuid, '') as user_uuid,
+			count(1) as request_count,
+			COALESCE(sum(quota), 0) as quota
+			FROM logs
+			WHERE type = ?
+			AND created_at >= ? AND created_at < ?
+			GROUP BY day, username, user_id, user_uuid
+			ORDER BY day, username, user_id
+		`
+		args = []any{LogTypeTool, start, endExclusive}
+	} else {
+		query = `
+			SELECT ` + groupSelect + `,
+			COALESCE(username, '') as username,
+			user_id,
+			COALESCE(user_uuid, '') as user_uuid,
+			count(1) as request_count,
+			COALESCE(sum(quota), 0) as quota
+			FROM logs
+			WHERE type = ?
+			AND user_id = ?
+			AND created_at >= ? AND created_at < ?
+			GROUP BY day, username, user_id, user_uuid
+			ORDER BY day, username, user_id
+		`
+		args = []any{LogTypeTool, userId, start, endExclusive}
+	}
+
+	var stats []*dto.ToolLogStatisticByUser
+	if err := LOG_DB.Raw(query, args...).Scan(&stats).Error; err != nil {
+		return nil, errors.Wrap(err, "search tool logs by day and user")
+	}
+	return stats, nil
+}
+
+// SearchToolLogsByDayAndToken returns per-day, per-token aggregates of tool
+// invocation logs (Type == LogTypeTool).
+func SearchToolLogsByDayAndToken(userId, start, endExclusive int) ([]*dto.ToolLogStatisticByToken, error) {
+	groupSelect := dayAggregationSelect()
+
+	var query string
+	var args []any
+
+	if userId == 0 {
+		query = `
+			SELECT ` + groupSelect + `,
+			COALESCE(username, '') as username,
+			user_id,
+			COALESCE(user_uuid, '') as user_uuid,
+			COALESCE(token_name, '') as token_name,
+			count(1) as request_count,
+			COALESCE(sum(quota), 0) as quota
+			FROM logs
+			WHERE type = ?
+			AND created_at >= ? AND created_at < ?
+			GROUP BY day, username, user_id, user_uuid, token_name
+			ORDER BY day, username, user_id, token_name
+		`
+		args = []any{LogTypeTool, start, endExclusive}
+	} else {
+		query = `
+			SELECT ` + groupSelect + `,
+			COALESCE(username, '') as username,
+			user_id,
+			COALESCE(user_uuid, '') as user_uuid,
+			COALESCE(token_name, '') as token_name,
+			count(1) as request_count,
+			COALESCE(sum(quota), 0) as quota
+			FROM logs
+			WHERE type = ?
+			AND user_id = ?
+			AND created_at >= ? AND created_at < ?
+			GROUP BY day, username, user_id, user_uuid, token_name
+			ORDER BY day, username, user_id, token_name
+		`
+		args = []any{LogTypeTool, userId, start, endExclusive}
+	}
+
+	var stats []*dto.ToolLogStatisticByToken
+	if err := LOG_DB.Raw(query, args...).Scan(&stats).Error; err != nil {
+		return nil, errors.Wrap(err, "search tool logs by day and token")
+	}
+	return stats, nil
+}
+
 // SearchLogsByDayAndModel returns per-day, per-model aggregates for logs in the
 // half-open timestamp range [start, endExclusive). `start` and `endExclusive`
 // are Unix seconds.
@@ -1019,7 +1357,10 @@ func SearchLogsByDayAndModel(userId, start, endExclusive int) (LogStatistics []*
 			model_name, count(1) as request_count,
 			sum(quota) as quota,
 			sum(prompt_tokens) as prompt_tokens,
-			sum(completion_tokens) as completion_tokens
+			sum(completion_tokens) as completion_tokens,
+			sum(cached_prompt_tokens) as cached_prompt_tokens,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN 1 ELSE 0 END) as cache_hit_count,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN quota ELSE 0 END) as cache_hit_quota
 			FROM logs
 			WHERE type=2
 			AND created_at >= ? AND created_at < ?
@@ -1033,7 +1374,10 @@ func SearchLogsByDayAndModel(userId, start, endExclusive int) (LogStatistics []*
 			model_name, count(1) as request_count,
 			sum(quota) as quota,
 			sum(prompt_tokens) as prompt_tokens,
-			sum(completion_tokens) as completion_tokens
+			sum(completion_tokens) as completion_tokens,
+			sum(cached_prompt_tokens) as cached_prompt_tokens,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN 1 ELSE 0 END) as cache_hit_count,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN quota ELSE 0 END) as cache_hit_quota
 			FROM logs
 			WHERE type=2
 			AND user_id= ?
@@ -1045,8 +1389,10 @@ func SearchLogsByDayAndModel(userId, start, endExclusive int) (LogStatistics []*
 	}
 
 	err = LOG_DB.Raw(query, args...).Scan(&LogStatistics).Error
-
-	return LogStatistics, err
+	if err != nil {
+		return nil, errors.Wrap(err, "search logs by day and model")
+	}
+	return LogStatistics, nil
 }
 
 // SearchLogsByDayAndUser returns per-day, per-user aggregates for logs within
@@ -1060,31 +1406,37 @@ func SearchLogsByDayAndUser(userId, start, endExclusive int) ([]*dto.LogStatisti
 	if userId == 0 {
 		query = `
 			SELECT ` + groupSelect + `,
-			username, user_id,
+			username, user_id, COALESCE(user_uuid, '') as user_uuid,
 			count(1) as request_count,
 			sum(quota) as quota,
 			sum(prompt_tokens) as prompt_tokens,
-			sum(completion_tokens) as completion_tokens
+			sum(completion_tokens) as completion_tokens,
+			sum(cached_prompt_tokens) as cached_prompt_tokens,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN 1 ELSE 0 END) as cache_hit_count,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN quota ELSE 0 END) as cache_hit_quota
 			FROM logs
 			WHERE type=2
 			AND created_at >= ? AND created_at < ?
-			GROUP BY day, username, user_id
+			GROUP BY day, username, user_id, user_uuid
 			ORDER BY day, username
 		`
 		args = []any{start, endExclusive}
 	} else {
 		query = `
 			SELECT ` + groupSelect + `,
-			username, user_id,
+			username, user_id, COALESCE(user_uuid, '') as user_uuid,
 			count(1) as request_count,
 			sum(quota) as quota,
 			sum(prompt_tokens) as prompt_tokens,
-			sum(completion_tokens) as completion_tokens
+			sum(completion_tokens) as completion_tokens,
+			sum(cached_prompt_tokens) as cached_prompt_tokens,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN 1 ELSE 0 END) as cache_hit_count,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN quota ELSE 0 END) as cache_hit_quota
 			FROM logs
 			WHERE type=2
 			AND user_id = ?
 			AND created_at >= ? AND created_at < ?
-			GROUP BY day, username, user_id
+			GROUP BY day, username, user_id, user_uuid
 			ORDER BY day, username
 		`
 		args = []any{userId, start, endExclusive}
@@ -1092,7 +1444,10 @@ func SearchLogsByDayAndUser(userId, start, endExclusive int) ([]*dto.LogStatisti
 
 	var stats []*dto.LogStatisticByUser
 	err := LOG_DB.Raw(query, args...).Scan(&stats).Error
-	return stats, err
+	if err != nil {
+		return nil, errors.Wrap(err, "search logs by day and user")
+	}
+	return stats, nil
 }
 
 // SearchLogsByDayAndToken returns per-day, per-token aggregates (scoped by
@@ -1108,15 +1463,18 @@ func SearchLogsByDayAndToken(userId, start, endExclusive int) ([]*dto.LogStatist
 		query = `
 			SELECT ` + groupSelect + `,
 			COALESCE(token_name, '') as token_name,
-			username, user_id,
+			username, user_id, COALESCE(user_uuid, '') as user_uuid,
 			count(1) as request_count,
 			sum(quota) as quota,
 			sum(prompt_tokens) as prompt_tokens,
-			sum(completion_tokens) as completion_tokens
+			sum(completion_tokens) as completion_tokens,
+			sum(cached_prompt_tokens) as cached_prompt_tokens,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN 1 ELSE 0 END) as cache_hit_count,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN quota ELSE 0 END) as cache_hit_quota
 			FROM logs
 			WHERE type=2
 			AND created_at >= ? AND created_at < ?
-			GROUP BY day, token_name, username, user_id
+			GROUP BY day, token_name, username, user_id, user_uuid
 			ORDER BY day, username, token_name
 		`
 		args = []any{start, endExclusive}
@@ -1124,16 +1482,19 @@ func SearchLogsByDayAndToken(userId, start, endExclusive int) ([]*dto.LogStatist
 		query = `
 			SELECT ` + groupSelect + `,
 			COALESCE(token_name, '') as token_name,
-			username, user_id,
+			username, user_id, COALESCE(user_uuid, '') as user_uuid,
 			count(1) as request_count,
 			sum(quota) as quota,
 			sum(prompt_tokens) as prompt_tokens,
-			sum(completion_tokens) as completion_tokens
+			sum(completion_tokens) as completion_tokens,
+			sum(cached_prompt_tokens) as cached_prompt_tokens,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN 1 ELSE 0 END) as cache_hit_count,
+			sum(CASE WHEN cached_prompt_tokens > 0 THEN quota ELSE 0 END) as cache_hit_quota
 			FROM logs
 			WHERE type=2
 			AND user_id = ?
 			AND created_at >= ? AND created_at < ?
-			GROUP BY day, token_name, username, user_id
+			GROUP BY day, token_name, username, user_id, user_uuid
 			ORDER BY day, username, token_name
 		`
 		args = []any{userId, start, endExclusive}
@@ -1141,5 +1502,8 @@ func SearchLogsByDayAndToken(userId, start, endExclusive int) ([]*dto.LogStatist
 
 	var stats []*dto.LogStatisticByToken
 	err := LOG_DB.Raw(query, args...).Scan(&stats).Error
-	return stats, err
+	if err != nil {
+		return nil, errors.Wrap(err, "search logs by day and token")
+	}
+	return stats, nil
 }

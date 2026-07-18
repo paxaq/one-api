@@ -1,15 +1,19 @@
 package model
 
 import (
+	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 
-	"github.com/songquanpeng/one-api/common"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/config"
 )
 
 func setupTestDB(t *testing.T) *gorm.DB {
@@ -193,4 +197,325 @@ func TestGetRandomSatisfiedChannelExcluding_SuspendedChannels(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, channel)
 	assert.Equal(t, 1, channel.Id, "Should only return the non-suspended channel")
+}
+
+func TestChannelHiddenModelsHelpers(t *testing.T) {
+	testDB := setupTestDB(t)
+	originalDB := DB
+	DB = testDB
+	defer func() { DB = originalDB }()
+
+	// Hidden-model matching remains case-insensitive so legacy configurations do
+	// not unexpectedly expose a model after routing becomes case-sensitive.
+	hidden := `[" ModelA ","modela","Other",""]`
+	channel := &Channel{
+		Id:           1,
+		Name:         "hidden-helper",
+		Status:       ChannelStatusEnabled,
+		Models:       "ModelA,Public",
+		Group:        "default",
+		HiddenModels: &hidden,
+	}
+	require.NoError(t, channel.NormalizeHiddenModels())
+	require.NotNil(t, channel.HiddenModels)
+	require.JSONEq(t, `["ModelA","Other"]`, *channel.HiddenModels)
+	require.True(t, channel.IsModelHidden("ModelA"))
+	require.True(t, channel.IsModelHidden("modela"))
+	require.True(t, channel.IsModelHidden("MODELA"))
+	require.False(t, channel.IsModelHidden("Other"), "hidden models outside Models should be treated as no-ops")
+
+	hiddenSet := channel.GetHiddenModels()
+	_, ok := hiddenSet["modela"]
+	require.True(t, ok)
+	_, ok = hiddenSet["other"]
+	require.False(t, ok)
+}
+
+func TestChannelUpdateInvalidatesHiddenModelCache(t *testing.T) {
+	testDB := setupTestDB(t)
+	originalDB := DB
+	DB = testDB
+	defer func() { DB = originalDB }()
+
+	originalUsingSQLite := common.UsingSQLite.Load()
+	common.UsingSQLite.Store(true)
+	defer func() { common.UsingSQLite.Store(originalUsingSQLite) }()
+
+	group := fmt.Sprintf("group-%d", time.Now().UnixNano())
+	channel := &Channel{
+		Name:   "hidden-cache",
+		Type:   1,
+		Status: ChannelStatusEnabled,
+		Models: "hidden-alpha,public-alias",
+		Group:  group,
+	}
+	require.NoError(t, channel.Insert())
+
+	abilities, err := GetGroupModelsV2(context.Background(), group)
+	require.NoError(t, err)
+	require.Len(t, abilities, 2)
+
+	hidden := `["hidden-alpha"]`
+	channel.HiddenModels = &hidden
+	channel.HiddenModelsProvided = true
+	require.NoError(t, channel.Update())
+
+	abilities, err = GetGroupModelsV2(context.Background(), group)
+	require.NoError(t, err)
+	require.Len(t, abilities, 1)
+	require.Equal(t, "public-alias", abilities[0].Model)
+
+	var dbAbilities []Ability
+	require.NoError(t, DB.Order("model").Find(&dbAbilities).Error)
+	require.Len(t, dbAbilities, 1)
+	require.Equal(t, "public-alias", dbAbilities[0].Model)
+}
+
+// TestCaseSensitiveRouting_Issue352 verifies that model names differing only in
+// case are routed as two independent models: a request routes only to channels
+// whose ability lists that exact casing, including variants on the same channel.
+func TestCaseSensitiveRouting_Issue352(t *testing.T) {
+	testDB := setupTestDB(t)
+	originalDB := DB
+	DB = testDB
+	t.Cleanup(func() { DB = originalDB })
+
+	originalUsingSQLite := common.UsingSQLite.Load()
+	originalUsingMySQL := common.UsingMySQL.Load()
+	originalUsingPostgreSQL := common.UsingPostgreSQL.Load()
+	common.UsingSQLite.Store(true)
+	common.UsingMySQL.Store(false)
+	common.UsingPostgreSQL.Store(false)
+	t.Cleanup(func() {
+		common.UsingSQLite.Store(originalUsingSQLite)
+		common.UsingMySQL.Store(originalUsingMySQL)
+		common.UsingPostgreSQL.Store(originalUsingPostgreSQL)
+	})
+
+	priority := int64(0)
+	channel := Channel{
+		Id:       1,
+		Name:     "case-variants",
+		Status:   ChannelStatusEnabled,
+		Models:   "deepseek-ai/DeepSeek-V4-Flash,deepseek-ai/deepseek-v4-flash",
+		Group:    "default",
+		Priority: &priority,
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+	require.NoError(t, channel.AddAbilities())
+
+	var abilityCount int64
+	require.NoError(t, DB.Model(&Ability{}).Where("channel_id = ?", channel.Id).Count(&abilityCount).Error)
+	require.EqualValues(t, 2, abilityCount)
+
+	// Each casing independently routes to the channel that lists both variants.
+	for _, tc := range []struct {
+		model    string
+		wantChan int
+	}{
+		{"deepseek-ai/DeepSeek-V4-Flash", 1},
+		{"deepseek-ai/deepseek-v4-flash", 1},
+	} {
+		for _, ignoreFirstPriority := range []bool{false, true} {
+			ch, err := GetRandomSatisfiedChannel("default", tc.model, ignoreFirstPriority)
+			require.NoErrorf(t, err, "model %q ignoreFirst=%v should route", tc.model, ignoreFirstPriority)
+			require.Equalf(t, tc.wantChan, ch.Id,
+				"model %q must route only to its exact-casing channel", tc.model)
+		}
+
+		ch, err := GetRandomSatisfiedChannelExcluding("default", tc.model, false, nil)
+		require.NoErrorf(t, err, "excluding: model %q should route", tc.model)
+		require.Equalf(t, tc.wantChan, ch.Id,
+			"excluding: model %q must route only to its exact-casing channel", tc.model)
+	}
+
+	// A casing that no channel lists must NOT route (would previously match
+	// case-insensitively on MySQL).
+	_, err := GetRandomSatisfiedChannel("default", "DEEPSEEK-AI/DEEPSEEK-V4-FLASH", false)
+	require.Error(t, err, "an unlisted casing must not route to any channel")
+}
+
+// TestCaseSensitiveRoutingMemoryCache verifies that the in-memory router keeps
+// case-variant model IDs as independent keys for the same channel.
+func TestCaseSensitiveRoutingMemoryCache(t *testing.T) {
+	testDB := setupTestDB(t)
+	originalDB := DB
+	DB = testDB
+	originalMemoryCacheEnabled := config.MemoryCacheEnabled
+	config.MemoryCacheEnabled = true
+	channelSyncLock.Lock()
+	originalChannelCache := group2model2channels
+	channelSyncLock.Unlock()
+
+	originalUsingSQLite := common.UsingSQLite.Load()
+	originalUsingMySQL := common.UsingMySQL.Load()
+	originalUsingPostgreSQL := common.UsingPostgreSQL.Load()
+	common.UsingSQLite.Store(true)
+	common.UsingMySQL.Store(false)
+	common.UsingPostgreSQL.Store(false)
+	t.Cleanup(func() {
+		DB = originalDB
+		config.MemoryCacheEnabled = originalMemoryCacheEnabled
+		common.UsingSQLite.Store(originalUsingSQLite)
+		common.UsingMySQL.Store(originalUsingMySQL)
+		common.UsingPostgreSQL.Store(originalUsingPostgreSQL)
+		channelSyncLock.Lock()
+		group2model2channels = originalChannelCache
+		channelSyncLock.Unlock()
+	})
+
+	priority := int64(0)
+	channel := Channel{
+		Id:       1,
+		Name:     "cache-case-variants",
+		Status:   ChannelStatusEnabled,
+		Models:   "ModelA,modela",
+		Group:    "default",
+		Priority: &priority,
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+	require.NoError(t, channel.AddAbilities())
+	InitChannelCache()
+
+	for _, modelName := range []string{"ModelA", "modela"} {
+		selected, err := CacheGetRandomSatisfiedChannel("default", modelName, false)
+		require.NoError(t, err)
+		require.Equal(t, channel.Id, selected.Id)
+
+		selected, err = CacheGetRandomSatisfiedChannelExcluding("default", modelName, false, nil, false)
+		require.NoError(t, err)
+		require.Equal(t, channel.Id, selected.Id)
+	}
+
+	_, err := CacheGetRandomSatisfiedChannel("default", "MODELA", false)
+	require.Error(t, err)
+}
+
+// TestCaseSensitiveRoutingMySQLLive verifies that the MySQL schema migration
+// permits and routes two case variants on the same channel. It requires MYSQL_DSN.
+func TestCaseSensitiveRoutingMySQLLive(t *testing.T) {
+	originalDB := DB
+	originalUsingSQLite := common.UsingSQLite.Load()
+	originalUsingMySQL := common.UsingMySQL.Load()
+	originalUsingPostgreSQL := common.UsingPostgreSQL.Load()
+
+	testDB := openChannelNullableBackend(t, "mysql")
+	if testDB == nil {
+		common.UsingSQLite.Store(originalUsingSQLite)
+		common.UsingMySQL.Store(originalUsingMySQL)
+		common.UsingPostgreSQL.Store(originalUsingPostgreSQL)
+		t.Skip("MYSQL_DSN not set; skipping live MySQL exact-model routing test")
+	}
+	DB = testDB
+	common.UsingSQLite.Store(false)
+	common.UsingMySQL.Store(true)
+	common.UsingPostgreSQL.Store(false)
+	t.Cleanup(func() {
+		DB = originalDB
+		common.UsingSQLite.Store(originalUsingSQLite)
+		common.UsingMySQL.Store(originalUsingMySQL)
+		common.UsingPostgreSQL.Store(originalUsingPostgreSQL)
+	})
+
+	require.NoError(t, MigrateAbilityModelCollation())
+	priority := int64(0)
+	channel := Channel{
+		Name:     "mysql-case-variants",
+		Status:   ChannelStatusEnabled,
+		Models:   "ModelA,modela",
+		Group:    "default",
+		Priority: &priority,
+	}
+	require.NoError(t, DB.Create(&channel).Error)
+	require.NoError(t, channel.AddAbilities())
+
+	var abilityCount int64
+	require.NoError(t, DB.Model(&Ability{}).Where("channel_id = ?", channel.Id).Count(&abilityCount).Error)
+	require.EqualValues(t, 2, abilityCount)
+
+	for _, modelName := range []string{"ModelA", "modela"} {
+		selected, err := GetRandomSatisfiedChannel("default", modelName, false)
+		require.NoError(t, err)
+		require.Equal(t, channel.Id, selected.Id)
+	}
+	_, err := GetRandomSatisfiedChannel("default", "MODELA", false)
+	require.Error(t, err)
+}
+
+// TestExactModelPredicateMySQL verifies that qualified model columns use the
+// non-deprecated MySQL rollout-defense cast.
+func TestExactModelPredicateMySQL(t *testing.T) {
+	originalUsingSQLite := common.UsingSQLite.Load()
+	originalUsingMySQL := common.UsingMySQL.Load()
+	originalUsingPostgreSQL := common.UsingPostgreSQL.Load()
+	common.UsingSQLite.Store(false)
+	common.UsingMySQL.Store(true)
+	common.UsingPostgreSQL.Store(false)
+	t.Cleanup(func() {
+		common.UsingSQLite.Store(originalUsingSQLite)
+		common.UsingMySQL.Store(originalUsingMySQL)
+		common.UsingPostgreSQL.Store(originalUsingPostgreSQL)
+	})
+
+	require.Equal(t, "abilities.model = CAST(? AS BINARY)", exactModelPredicate("abilities.model"))
+}
+
+// TestGetRandomSatisfiedChannelExcludingMySQLCountError verifies that the
+// MySQL candidate count uses exact matching and propagates database failures.
+func TestGetRandomSatisfiedChannelExcludingMySQLCountError(t *testing.T) {
+	mock, closeDB := setupMySQLMockDB(t)
+	mock.ExpectQuery("SELECT count\\(\\*\\) FROM `abilities` WHERE .*model = CAST\\(\\? AS BINARY\\).*").
+		WithArgs("default", "ModelA", true, sqlmock.AnyArg()).
+		WillReturnError(fmt.Errorf("count query failed"))
+
+	_, err := GetRandomSatisfiedChannelExcluding("default", "ModelA", false, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "count available channels after exclusions")
+	require.Contains(t, err.Error(), "count query failed")
+
+	require.NoError(t, closeDB())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestSuspendAbilityExactModel verifies that suspension changes only the exact
+// model variant and reports a missing exact ability instead of silently succeeding.
+func TestSuspendAbilityExactModel(t *testing.T) {
+	testDB := setupTestDB(t)
+	originalDB := DB
+	DB = testDB
+	t.Cleanup(func() { DB = originalDB })
+
+	originalUsingSQLite := common.UsingSQLite.Load()
+	originalUsingMySQL := common.UsingMySQL.Load()
+	originalUsingPostgreSQL := common.UsingPostgreSQL.Load()
+	common.UsingSQLite.Store(true)
+	common.UsingMySQL.Store(false)
+	common.UsingPostgreSQL.Store(false)
+	t.Cleanup(func() {
+		common.UsingSQLite.Store(originalUsingSQLite)
+		common.UsingMySQL.Store(originalUsingMySQL)
+		common.UsingPostgreSQL.Store(originalUsingPostgreSQL)
+	})
+
+	priority := int64(0)
+	abilities := []Ability{
+		{Group: "default", Model: "ModelA", ChannelId: 1, Enabled: true, Priority: &priority},
+		{Group: "default", Model: "modela", ChannelId: 1, Enabled: true, Priority: &priority},
+	}
+	require.NoError(t, DB.Create(&abilities).Error)
+	require.NoError(t, SuspendAbility(context.Background(), "default", "ModelA", 1, time.Minute))
+
+	var mixedCase Ability
+	require.NoError(t, DB.Where("`group` = ? AND model = ? AND channel_id = ?", "default", "ModelA", 1).
+		First(&mixedCase).Error)
+	require.NotNil(t, mixedCase.SuspendUntil)
+
+	var lowerCase Ability
+	require.NoError(t, DB.Where("`group` = ? AND model = ? AND channel_id = ?", "default", "modela", 1).
+		First(&lowerCase).Error)
+	require.Nil(t, lowerCase.SuspendUntil)
+
+	err := SuspendAbility(context.Background(), "default", "MODELA", 1, time.Minute)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "affected 0 rows instead of 1")
 }

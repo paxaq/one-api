@@ -54,6 +54,11 @@ const (
 	// Read widely for billing, logging, and meta.
 	ChannelId = "channel_id"
 
+	// ChannelUUID is the external UUID of the selected channel.
+	// Set in: middleware/distributor after the channel row is selected.
+	// Read by relay metadata and log writers that need client-safe identifiers.
+	ChannelUUID = "channel_uuid"
+
 	// SpecificChannelId indicates the caller explicitly requested a particular channel.
 	// Set in: middleware/auth.TokenAuth via token suffix or :channelid route param (admin-only).
 	// Read in: middleware/distributor to bypass normal selection and use that specific channel.
@@ -139,6 +144,11 @@ const (
 	// Read in: billing and logs.
 	TokenId = "token_id"
 
+	// TokenUUID is the external UUID of the API token used for this request.
+	// Set in: middleware/auth.TokenAuth.
+	// Read by relay metadata and log writers that need client-safe identifiers.
+	TokenUUID = "token_uuid"
+
 	// TokenName is the name/label of the API token used for this request.
 	// Set in: middleware/auth.TokenAuth.
 	// Read in: image controller logs and metrics.
@@ -159,6 +169,11 @@ const (
 	// Read in: downstream handlers to avoid redundant DB/cache lookups for user fields
 	// (username, group, quota, status, etc.).
 	UserObj = "user_obj"
+
+	// UserUUID is the external UUID of the authenticated user.
+	// Set in: middleware/auth for session and token authentication.
+	// Read by relay metadata and log writers that need client-safe identifiers.
+	UserUUID = "user_uuid"
 
 	// BaseURL is the provider base URL resolved from the selected channel.
 	// Set in: middleware/distributor from channel.GetBaseURL().
@@ -282,6 +297,20 @@ const (
 	// upstream chat completion SSE chunks into another streaming format (e.g., Response API)
 	// before flushing them to the client.
 	ResponseStreamRewriteHandler = "response_stream_rewrite_handler"
+
+	// ToolNameSanitizeMap stores a per-request bidirectional rename table produced when
+	// tool/function names are sanitized for strict upstream validators (DeepSeek, OpenAI,
+	// Anthropic — all of which enforce `^[a-zA-Z0-9_-]+$`). The value is a map[string]string
+	// keyed by the sanitized name and yielding the original client-provided name. Response
+	// handlers consult this map to restore original names on
+	// `choices[].message.tool_calls[].function.name` (non-stream) and
+	// `choices[].delta.tool_calls[].function.name` (stream) before forwarding to the client,
+	// so the round-trip stays transparent to MCP-namespaced names like `server.tool`.
+	// Set in: relay/adaptor/common/toolnamesafe.SanitizeRequestToolNames.
+	// Read in: relay/adaptor/openai_compatible.Handler / UnifiedStreamProcessing and
+	// relay/adaptor/openai.Handler / StreamHandler / relay/adaptor/anthropic handlers when
+	// restoring names.
+	ToolNameSanitizeMap = "tool_name_sanitize_map"
 
 	// ResponseFormat is used by image APIs to carry desired output format when posted via JSON.
 	// Set in: image controller from request payload.

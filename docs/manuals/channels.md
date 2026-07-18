@@ -13,6 +13,7 @@ This guide explains how One-API channels work, how to set them up, and what ever
     - [2.3 Advanced JSON Fields](#23-advanced-json-fields)
     - [2.4 Operational Settings](#24-operational-settings)
   - [3. Model Pricing \& Quotas](#3-model-pricing--quotas)
+    - [Time-of-Day Pricing Windows](#time-of-day-pricing-windows)
   - [4. Tooling Policy](#4-tooling-policy)
     - [Tooling Config JSON Schema](#tooling-config-json-schema)
   - [5. Groups and Routing](#5-groups-and-routing)
@@ -61,8 +62,11 @@ Open **Channels → Create Channel** or select an existing channel and choose **
 | **API Key**          | Provider credential. Leave blank while editing to keep the stored secret. Some providers (AWS, Vertex, Coze OAuth) build the key automatically from other fields.               |
 | **Base URL**         | Endpoint root. Optional unless the provider demands it (Azure, OpenAI-compatible). Trailing slashes are trimmed automatically.                                                  |
 | **Group Membership** | Multi-select of logical user groups (default is always included). Channels are eligible only for the groups you assign here.                                                    |
-| **Models**           | Explicit allowlist of model IDs routed through this channel. Empty list means “all supported models”. The helper dialog offers search, bulk add, and clear actions.             |
+| **Models**           | Explicit allowlist of case-sensitive model IDs routed through this channel. `Foo` and `foo` are distinct routing identifiers. Empty list means “all supported models”. The helper dialog offers search, bulk add, and clear actions. |
 | **Model Mapping**    | JSON object translating external model names to upstream model IDs (string → string). Useful when clients send `gpt-4` but upstream expects a deployment alias.                 |
+| **Hidden Models**    | Models this channel can serve internally but must not expose publicly. Hidden-name matching is case-insensitive for compatibility with existing configurations, while routing IDs remain case-sensitive. Hidden models are removed from `/v1/models`, rejected from direct user requests, and remain usable as Model Mapping targets. |
+
+**Alias fan-out example:** if Channel 1 serves upstream `A` and Channel 2 serves upstream `B`, configure them as `Models="A,C"` + `Hidden Models=["A"]` + `Model Mapping={"C":"A"}` and `Models="B,C"` + `Hidden Models=["B"]` + `Model Mapping={"C":"B"}`. Users see only `C` in `/v1/models`, while the gateway still rewrites `C` to `A` or `B` upstream.
 
 ### 2.2 Provider Credentials & Config (`config` block)
 
@@ -85,7 +89,7 @@ Any new provider that requires extra configuration will appear in this section a
 | **System Prompt**             | Optional default system message injected into every request when the upstream supports it.                                                                                                               |
 | **Inference Profile ARN Map** | AWS Bedrock only. JSON map of model → Inference Profile ARN.                                                                                                                                             |
 
-All JSON fields accept formatted input; the **Format** buttons auto-indent valid JSON, and empty strings are saved as `null`.
+All JSON fields accept formatted input; the **Format** buttons auto-indent valid JSON. Submitting an empty string for `model_mapping`, `model_configs`, `system_prompt`, or `inference_profile_arn_map` clears the stored value (saved as `NULL`). Omitting the field from the request leaves the existing value untouched.
 
 ### 2.4 Operational Settings
 
@@ -105,6 +109,58 @@ One-API meters usage in unified quota units. Channel-level pricing can override 
 2. **Legacy fields** (`model_ratio`, `completion_ratio`): still respected during migration but replaced by `model_configs` in the UI.
 
 When pricing data is missing, One-API falls back to adapter defaults (see `relay/adaptor/*/constants.go`). For accurate billing, provide explicit values that match your provider contract.
+
+### Time-of-Day Pricing Windows
+
+`model_configs` can include `time_windows` for providers that charge different rates by local wall-clock time. Windows are evaluated once at request start time, before tiered pricing. A streaming request keeps the same rate even if it crosses a window boundary.
+
+Each window has:
+
+- `name`: optional display label.
+- `timezone`: IANA timezone name. Empty means `UTC`; daylight-saving changes follow that zone's local wall clock.
+- `ranges`: one or more `{ "start": "HH:MM", "end": "HH:MM" }` ranges. `end <= start` crosses midnight. `start == end` means all day.
+- `days_of_week`: optional list where Sunday is `0` and Saturday is `6`.
+- `date_from` / `date_to`: optional local calendar dates in `YYYY-MM-DD`; `date_from` is inclusive and `date_to` is exclusive.
+- `overlay`: sparse pricing fields. Non-zero numeric fields override the base model config; zero inherits. A non-empty `tiers` list replaces the base tier ladder. Nested media blocks merge field by field and map keys from the overlay win.
+
+DeepSeek-style peak-surcharge example (base ratios are the published list = off-peak
+price; peak hours bill at 2x):
+
+```json
+{
+  "deepseek-v4-flash": {
+    "ratio": 0.00000014,
+    "completion_ratio": 2.0,
+    "cached_input_ratio": 0.0000000028,
+    "time_windows": [
+      {
+        "name": "deepseek-peak",
+        "timezone": "Asia/Shanghai",
+        "date_from": "2026-07-15",
+        "ranges": [
+          { "start": "09:00", "end": "12:00" },
+          { "start": "14:00", "end": "18:00" }
+        ],
+        "overlay": {
+          "ratio": 0.00000028,
+          "cached_input_ratio": 0.0000000056
+        }
+      }
+    ]
+  }
+}
+```
+
+Window order is precedence: the first matching window wins. `overlay.time_windows` is rejected to prevent recursive pricing.
+
+**Built-in DeepSeek V4 schedule:** The DeepSeek adaptor ships a peak window by
+default for `deepseek-chat`, `deepseek-reasoner`, `deepseek-v4-flash`, and
+`deepseek-v4-pro`, so no manual `model_configs` entry is needed. The base ratios are
+the published list (= off-peak / 平时) price; peak (高峰) hours bill input, cache-hit
+input, and output at 2x, per DeepSeek's 2026-06-29 峰谷定价 notice. DeepSeek's peak
+hours are `09:00–12:00` and `14:00–18:00` Asia/Shanghai, and the surcharge is gated
+by `date_from` to the V4 official release (mid-July 2026). A channel `model_configs`
+entry for the same model overrides this default window.
 
 **Balance & Usage:** Additional readonly fields (visible in the table, not the form) track balance, last update time, and consumed quota.
 
@@ -159,7 +215,9 @@ The UI offers helper buttons:
 - Numeric fields (priority, weight, rate limit) accept integers only; blank values become `0`.
 - Coze OAuth JWT requires a full JSON object with `client_type`, `client_id`, `coze_www_base`, `coze_api_base`, `private_key`, and `public_key_id`.
 - Azure `other` field defaults to the latest supported API version if left blank.
-- Clearing sensitive fields: leaving the API key empty when editing keeps the stored value. To remove credentials entirely, disable or delete the channel.
+- Clearing sensitive fields: leaving the API key empty when editing keeps the stored value. To remove credentials entirely, disable or delete the channel. The same convention applies to global options whose key ends in `Token`, `Secret`, or `Password`: an empty string in the form is ignored on save.
+- Hidden Models is a non-blocking warning field. If you hide a name that is not listed in **Models**, One-API treats it as a no-op. If you hide a name that is also a **Model Mapping** source, the public alias becomes unreachable.
+- Model routing and Model Mapping keys are case-sensitive. Hidden Models is intentionally case-insensitive so a legacy entry such as `modela` continues to hide a configured model named `ModelA`.
 
 ## 8. Troubleshooting Checklist
 
@@ -169,6 +227,11 @@ The UI offers helper buttons:
 | Channel edit form loads with empty tooling JSON                    | Stored config is `null` or invalid JSON                 | Re-enter JSON, use **Format** to validate                                      |
 | 401/403 from provider                                              | API key malformed, missing base URL, or wrong auth type | Re-enter credentials; verify channel type matches provider                     |
 | Users hit “no enabled channel” errors                              | Channel disabled, group mismatch, or model not in list  | Re-enable channel, adjust groups/models                                        |
+| `/v1/models` does not show an upstream model                       | The upstream model is listed in **Hidden Models**       | Call the public alias instead, or test the upstream model only through an explicit admin channel selection |
+
+**FAQ: Why doesn't `/v1/models` list my upstream model?**
+
+If the model is configured in **Hidden Models**, One-API still allows the channel to serve it internally, for example as a **Model Mapping** target, but it is intentionally removed from public model discovery and rejected for direct user requests. Keep the public alias in **Models**, map the alias to the upstream target, and hide only the upstream target. Administrators can still test the underlying model by selecting the channel explicitly.
 
 ## 9. Glossary of Data Fields
 

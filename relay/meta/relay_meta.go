@@ -8,19 +8,43 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/channeltype"
-	"github.com/songquanpeng/one-api/relay/relaymode"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/channeltype"
+	"github.com/Laisky/one-api/relay/relaymode"
 )
+
+// IsClaudeModelName reports whether the model name belongs to the Anthropic
+// Claude family (case-insensitive "claude" prefix). Used to route Claude models
+// on multi-surface channels (Azure AI Foundry) to Anthropic handling.
+func IsClaudeModelName(modelName string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelName)), "claude")
+}
+
+// AzureTargetsAnthropic reports whether this request targets an Anthropic Claude
+// model on an Azure AI Foundry channel. Azure AI Foundry serves OpenAI models via
+// the Azure OpenAI surface (/openai/deployments/...) but serves Claude models ONLY
+// via the native Anthropic Messages API (/anthropic/v1/messages) — there is no
+// OpenAI-compatible route for Claude on Foundry. The dedicated Azure adaptor
+// (relay/adaptor/azure) and the chat passthrough fast-path in the relay controller
+// dispatch on this predicate. It is scoped strictly to the Azure channel.
+func (m *Meta) AzureTargetsAnthropic() bool {
+	if m == nil || m.ChannelType != channeltype.Azure {
+		return false
+	}
+	return IsClaudeModelName(m.OriginModelName) || IsClaudeModelName(m.ActualModelName)
+}
 
 type Meta struct {
 	Mode         int
 	ChannelType  int
 	ChannelId    int
+	ChannelUUID  string
 	TokenId      int
+	TokenUUID    string
 	TokenName    string
 	UserId       int
+	UserUUID     string
 	Group        string
 	ModelMapping map[string]string
 	// BaseURL is the proxy url set in the channel config
@@ -39,6 +63,9 @@ type Meta struct {
 	ChannelRatio        float64
 	ForcedSystemPrompt  string
 	StartTime           time.Time
+	// UpstreamRequestURL is the final URL sent to the upstream provider.
+	// Populated by the relay layer before/after the request is dispatched.
+	UpstreamRequestURL string
 }
 
 // GetMappedModelName returns the mapped model name and a bool indicating if the model name is mapped
@@ -55,6 +82,23 @@ func GetMappedModelName(modelName string, mapping map[string]string) string {
 	return modelName
 }
 
+// UpstreamEndpointURLOverride returns the administrator-configured full upstream
+// URL override for the endpoint that matches this request's relay mode, or an
+// empty string when no override is set. The relay layer uses this to redirect an
+// individual endpoint (for example a non-standard rerank surface) to a custom
+// upstream URL while leaving the channel's other endpoints on the BaseURL-derived
+// defaults. The returned value is trimmed of surrounding whitespace.
+func (m *Meta) UpstreamEndpointURLOverride() string {
+	if m == nil || len(m.Config.EndpointURLs) == 0 {
+		return ""
+	}
+	name := channeltype.RelayModeToEndpointName(m.Mode)
+	if name == "" {
+		return ""
+	}
+	return strings.TrimSpace(m.Config.EndpointURLs[name])
+}
+
 func GetByContext(c *gin.Context) *Meta {
 	lg := gmw.GetLogger(c)
 	if v, ok := c.Get(ctxkey.Meta); ok {
@@ -68,6 +112,7 @@ func GetByContext(c *gin.Context) *Meta {
 			}
 			existingMeta.ChannelType = c.GetInt(ctxkey.Channel)
 			existingMeta.ChannelId = currentChannelId
+			existingMeta.ChannelUUID = c.GetString(ctxkey.ChannelUUID)
 			existingMeta.BaseURL = c.GetString(ctxkey.BaseURL)
 			existingMeta.APIKey = strings.TrimPrefix(c.Request.Header.Get("Authorization"), "Bearer ")
 			existingMeta.ChannelRatio = c.GetFloat64(ctxkey.ChannelRatio)
@@ -99,9 +144,12 @@ func GetByContext(c *gin.Context) *Meta {
 		Mode:               relaymode.GetByPath(c.Request.URL.Path),
 		ChannelType:        c.GetInt(ctxkey.Channel),
 		ChannelId:          c.GetInt(ctxkey.ChannelId),
+		ChannelUUID:        c.GetString(ctxkey.ChannelUUID),
 		TokenId:            c.GetInt(ctxkey.TokenId),
+		TokenUUID:          c.GetString(ctxkey.TokenUUID),
 		TokenName:          c.GetString(ctxkey.TokenName),
 		UserId:             c.GetInt(ctxkey.Id),
+		UserUUID:           c.GetString(ctxkey.UserUUID),
 		Group:              c.GetString(ctxkey.Group),
 		ModelMapping:       c.GetStringMapString(ctxkey.ModelMapping),
 		OriginModelName:    c.GetString(ctxkey.RequestModel),

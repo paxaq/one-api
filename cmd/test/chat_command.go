@@ -33,29 +33,35 @@ const (
 //   - error: non-nil when argument parsing or probe execution fails.
 func chat(ctx context.Context, logger glog.Logger, args []string) error {
 	if len(args) == 0 {
-		return errors.New("missing chat subcommand, expected: response")
+		return errors.New("missing chat subcommand, expected: response | ws-guard")
 	}
 
 	subcommand := strings.ToLower(strings.TrimSpace(args[0]))
-	if subcommand != "response" {
-		return errors.Errorf("unknown chat subcommand %q, expected: response", subcommand)
-	}
 
 	cfg, err := loadConfig()
 	if err != nil {
 		return errors.Wrap(err, "load config")
 	}
 
-	opts, err := parseChatResponseArgs(args[1:], cfg)
-	if err != nil {
-		return errors.Wrap(err, "parse chat response arguments")
+	switch subcommand {
+	case "response":
+		opts, parseErr := parseChatResponseArgs(args[1:], cfg)
+		if parseErr != nil {
+			return errors.Wrap(parseErr, "parse chat response arguments")
+		}
+		if !opts.useWebSocket {
+			return errors.New("only websocket probe is supported by this command for now; pass --ws")
+		}
+		return runChatResponseWebSocketProbe(ctx, logger, opts)
+	case "ws-guard":
+		opts, parseErr := parseWSGuardArgs(args[1:], cfg)
+		if parseErr != nil {
+			return errors.Wrap(parseErr, "parse chat ws-guard arguments")
+		}
+		return runChatResponseWSGuardProbe(ctx, logger, opts)
+	default:
+		return errors.Errorf("unknown chat subcommand %q, expected: response | ws-guard", subcommand)
 	}
-
-	if !opts.useWebSocket {
-		return errors.New("only websocket probe is supported by this command for now; pass --ws")
-	}
-
-	return runChatResponseWebSocketProbe(ctx, logger, opts)
 }
 
 // chatResponseOptions captures CLI options for `chat response` probes.
@@ -97,7 +103,7 @@ func parseChatResponseArgs(args []string, cfg config) (chatResponseOptions, erro
 	fs.StringVar(&opts.apiToken, "token", strings.TrimSpace(cfg.Token), "API token; defaults to API_TOKEN")
 
 	if err := fs.Parse(args); err != nil {
-		return chatResponseOptions{}, err
+		return chatResponseOptions{}, errors.Wrap(err, "parse chat response flags")
 	}
 
 	opts.apiEndpoint = strings.TrimSpace(opts.apiEndpoint)
@@ -209,7 +215,7 @@ func runChatResponseWebSocketProbe(ctx context.Context, logger glog.Logger, opts
 		}
 
 		if err := responseWebSocketMessageError(msg); err != nil {
-			return err
+			return errors.Wrap(err, "inspect websocket response message")
 		}
 
 		if isResponseWebSocketTerminalMessage(msg) {

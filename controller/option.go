@@ -5,19 +5,31 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Laisky/errors/v2"
+	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/helper"
-	"github.com/songquanpeng/one-api/model"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/helper"
+	"github.com/Laisky/one-api/common/logger"
+	"github.com/Laisky/one-api/model"
 )
+
+// isSensitiveOptionKey reports whether the option key holds a secret value
+// (e.g. tokens, secrets, passwords) and should never be echoed back to the
+// client or overwritten with an empty value submitted by a UI form.
+func isSensitiveOptionKey(key string) bool {
+	return strings.HasSuffix(key, "Token") ||
+		strings.HasSuffix(key, "Secret") ||
+		strings.HasSuffix(key, "Password")
+}
 
 // GetOptions returns the current configuration options excluding sensitive values.
 func GetOptions(c *gin.Context) {
-	var options []*model.Option
+	options := make([]*model.Option, 0)
 	config.OptionMapRWMutex.Lock()
 	for k, v := range config.OptionMap {
-		if strings.HasSuffix(k, "Token") || strings.HasSuffix(k, "Secret") {
+		if isSensitiveOptionKey(k) {
 			continue
 		}
 		options = append(options, &model.Option{
@@ -38,9 +50,20 @@ func UpdateOption(c *gin.Context) {
 	var option model.Option
 	err := json.NewDecoder(c.Request.Body).Decode(&option)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": invalidParameterMessage,
+		helper.RespondErrorWithStatus(c, http.StatusBadRequest, errors.New(invalidParameterMessage))
+		return
+	}
+	// Protect sensitive options (Token/Secret/Password suffix) from accidental
+	// overwrite when the client submits an empty string. GetOptions strips
+	// these values before returning them, so a UI form will always render them
+	// empty; saving the form must therefore treat empty as "no change" rather
+	// than wiping the stored secret. NEVER log the value itself.
+	if strings.TrimSpace(option.Value) == "" && isSensitiveOptionKey(option.Key) {
+		logger.Logger.Debug("ignored empty value for sensitive option to prevent overwrite",
+			zap.String("key", option.Key))
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "empty value ignored for sensitive option",
 		})
 		return
 	}
@@ -51,51 +74,33 @@ func UpdateOption(c *gin.Context) {
 			option.Value = "modern"
 		}
 		if !config.ValidThemes[option.Value] {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "invalid theme",
-			})
+			helper.RespondError(c, errors.New("invalid theme"))
 			return
 		}
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && config.GitHubClientId == "" {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "Unable to enable GitHub OAuth, please fill in the GitHub Client Id and GitHub Client Secret first!",
-			})
+			helper.RespondError(c, errors.New("Unable to enable GitHub OAuth, please fill in the GitHub Client Id and GitHub Client Secret first!"))
 			return
 		}
 	case "EmailDomainRestrictionEnabled":
 		if option.Value == "true" && len(config.EmailDomainWhitelist) == 0 {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "Unable to enable email domain restriction, please fill in the restricted email domains first!",
-			})
+			helper.RespondError(c, errors.New("Unable to enable email domain restriction, please fill in the restricted email domains first!"))
 			return
 		}
 	case "WeChatAuthEnabled":
 		if option.Value == "true" && config.WeChatServerAddress == "" {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "Unable to enable WeChat login, please fill in the relevant configuration information for WeChat login first!",
-			})
+			helper.RespondError(c, errors.New("Unable to enable WeChat login, please fill in the relevant configuration information for WeChat login first!"))
 			return
 		}
 	case "TurnstileCheckEnabled":
 		if option.Value == "true" && config.TurnstileSiteKey == "" {
-			c.JSON(http.StatusOK, gin.H{
-				"success": false,
-				"message": "Unable to enable Turnstile verification, please fill in the relevant configuration information for Turnstile verification first!",
-			})
+			helper.RespondError(c, errors.New("Unable to enable Turnstile verification, please fill in the relevant configuration information for Turnstile verification first!"))
 			return
 		}
 	}
 	err = model.UpdateOption(option.Key, option.Value)
 	if err != nil {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": err.Error(),
-		})
+		helper.RespondError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{

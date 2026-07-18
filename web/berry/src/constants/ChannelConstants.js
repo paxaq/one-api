@@ -164,6 +164,66 @@ export const CHANNEL_OPTIONS = {
     value: 39,
     color: 'primary'
   },
+  54: {
+    key: 54,
+    text: 'Fireworks',
+    value: 54,
+    color: 'primary'
+  },
+  55: {
+    key: 55,
+    text: 'NVIDIA',
+    value: 55,
+    color: 'success'
+  },
+  56: {
+    key: 56,
+    text: 'Cerebras',
+    value: 56,
+    color: 'orange'
+  },
+  50: {
+    key: 50,
+    text: 'OpenAI Compatible',
+    value: 50,
+    color: 'success'
+  },
+  51: {
+    key: 51,
+    text: 'Gemini (OpenAI)',
+    value: 51,
+    color: 'warning'
+  },
+  52: {
+    key: 52,
+    text: 'Claude Compatible',
+    value: 52,
+    color: 'primary'
+  },
+  53: {
+    key: 53,
+    text: 'GitHub Copilot',
+    value: 53,
+    color: 'primary'
+  },
+  47: {
+    key: 47,
+    text: '百度文心千帆 V2',
+    value: 47,
+    color: 'primary'
+  },
+  48: {
+    key: 48,
+    text: '讯飞星火认知 V2',
+    value: 48,
+    color: 'primary'
+  },
+  49: {
+    key: 49,
+    text: '阿里云百炼',
+    value: 49,
+    color: 'primary'
+  },
   42: {
     key: 42,
     text: 'VertexAI',

@@ -11,18 +11,23 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/client"
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/common/tracing"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/meta"
+	"github.com/Laisky/one-api/common/client"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/common/tracing"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/meta"
 )
 
 const (
 	extraRequestHeaderPrefix = "X-"
 	requestPreviewLimit      = 4096
+	channelAPIKeyPlaceholder = "{{key}}"
 )
 
+// SetupCommonRequestHeader copies shared downstream headers into the upstream
+// request before provider-specific and channel-specific headers are applied.
+// Parameters: c is the incoming Gin context, req is the outbound upstream
+// request, and meta carries stream state. Return value: none.
 func SetupCommonRequestHeader(c *gin.Context, req *http.Request, meta *meta.Meta) {
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	req.Header.Set("Accept", c.Request.Header.Get("Accept"))
@@ -38,10 +43,72 @@ func SetupCommonRequestHeader(c *gin.Context, req *http.Request, meta *meta.Meta
 	}
 }
 
+// applyChannelCustomHeaders overlays channel-configured upstream headers after
+// client headers and provider defaults have been populated. Parameters: req is
+// the outbound upstream request, and meta carries channel configuration and API
+// key material. Return value: an error when a configured header name is invalid.
+func applyChannelCustomHeaders(req *http.Request, meta *meta.Meta) error {
+	if req == nil || meta == nil || len(meta.Config.CustomHeaders) == 0 {
+		return nil
+	}
+
+	for rawName, rawValue := range meta.Config.CustomHeaders {
+		name := strings.TrimSpace(rawName)
+		if name == "" {
+			continue
+		}
+		if !isValidCustomHeaderName(name) {
+			return errors.Errorf("invalid custom header name %q", name)
+		}
+		req.Header.Set(name, expandChannelCustomHeaderValue(rawValue, meta.APIKey))
+	}
+
+	return nil
+}
+
+// expandChannelCustomHeaderValue replaces the channel API-key placeholder in a
+// configured header value. Parameters: value is the stored template, and apiKey
+// is the selected channel credential. Return value: the rendered header value.
+func expandChannelCustomHeaderValue(value string, apiKey string) string {
+	return strings.ReplaceAll(value, channelAPIKeyPlaceholder, apiKey)
+}
+
+// isValidCustomHeaderName reports whether name is a conservative HTTP header
+// field-name token. Parameters: name is the administrator-provided header key.
+// Return value: true when the key is safe to pass to net/http.
+func isValidCustomHeaderName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			continue
+		case r >= 'A' && r <= 'Z':
+			continue
+		case r >= '0' && r <= '9':
+			continue
+		case strings.ContainsRune("!#$%&'*+-.^_`|~", r):
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func DoRequestHelper(a Adaptor, c *gin.Context, meta *meta.Meta, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(meta)
 	if err != nil {
 		return nil, errors.Wrap(err, "get request url failed")
+	}
+	if meta != nil {
+		// Honor an administrator-configured per-endpoint upstream URL override.
+		// When set, it fully replaces the adaptor-computed URL for this endpoint.
+		if override := meta.UpstreamEndpointURLOverride(); override != "" {
+			fullRequestURL = override
+		}
+		meta.UpstreamRequestURL = fullRequestURL
 	}
 
 	var (
@@ -91,6 +158,9 @@ func DoRequestHelper(a Adaptor, c *gin.Context, meta *meta.Meta, requestBody io.
 	err = a.SetupRequestHeader(c, req, meta)
 	if err != nil {
 		return nil, errors.Wrap(err, "setup request header failed")
+	}
+	if err = applyChannelCustomHeaders(req, meta); err != nil {
+		return nil, errors.Wrap(err, "apply channel custom headers")
 	}
 
 	// Prepare tagged logger and propagate to context

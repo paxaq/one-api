@@ -9,10 +9,10 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/helper"
-	"github.com/songquanpeng/one-api/relay/model"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/helper"
+	"github.com/Laisky/one-api/relay/model"
 )
 
 // AbortWithError aborts the request with an error message
@@ -110,6 +110,11 @@ func shouldLogAsWarning(statusCode int, err error) bool {
 	switch {
 	case strings.Contains(err.Error(), "token not found for key:"):
 		return true
+	case strings.Contains(err.Error(), "No available channels for Model"):
+		// No channel is configured/available for the requested model under the
+		// group. This is an operator/configuration condition rather than a
+		// server fault, so it is logged as WARN to avoid noisy ERROR alerts.
+		return true
 	default:
 		return false
 	}
@@ -160,37 +165,97 @@ func isModelInList(modelName string, models string) bool {
 	return slices.Contains(modelList, modelName)
 }
 
-// GetTokenKeyParts extracts the token key parts from the Authorization header
+// authTokenSource identifies which request header (or transport) supplied the
+// API credential. It is used purely for diagnostics and never carries the
+// credential value itself, so it is safe to log.
+type authTokenSource string
+
+const (
+	authSourceNone          authTokenSource = "none"
+	authSourceAuthorization authTokenSource = "authorization"
+	authSourceXAPIKey       authTokenSource = "x-api-key"
+	authSourceAPIKey        authTokenSource = "api-key"
+	authSourceWebSocket     authTokenSource = "websocket-subprotocol"
+)
+
+// TokenKeyInfo is the parsed form of the incoming API credential together with
+// diagnostic metadata. The metadata never contains the raw secret, so it is
+// safe to log.
+type TokenKeyInfo struct {
+	// Parts is the credential split on '-'. Parts[0] is the token; any
+	// additional parts are interpreted as an admin channel specification
+	// (see TokenAuth). It always has at least one element.
+	Parts []string
+	// Source records which header/transport supplied the credential.
+	Source authTokenSource
+	// HadScheme reports whether a `Bearer ` authentication scheme prefix was
+	// present and stripped.
+	HadScheme bool
+}
+
+// extractRawCredential returns the raw credential string from the request and
+// the source it was read from. It accepts, in order of precedence:
 //
-// key like `sk-{token}[-{channelid}]`
-//
-// For WebSocket upgrade requests from browsers (which cannot set custom headers),
-// the API key may be passed via the Sec-WebSocket-Protocol header using the
-// subprotocol format: "openai-insecure-api-key.{KEY}"
-func GetTokenKeyParts(c *gin.Context) []string {
-	key := c.Request.Header.Get("Authorization")
-	if key == "" {
-		// compatible with Anthropic
-		key = c.Request.Header.Get("X-Api-Key")
+//  1. Authorization header — standard OpenAI `Bearer` scheme.
+//  2. X-Api-Key header — Anthropic-compatible.
+//  3. Api-Key header — Azure OpenAI-compatible. GitHub Copilot's `azure` BYOK
+//     provider type sends the key in this header rather than Authorization.
+//  4. Sec-WebSocket-Protocol subprotocol — OpenAI Realtime over WebSocket, for
+//     browsers that cannot set custom headers:
+//     "Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.{KEY}, openai-beta.realtime-v1"
+func extractRawCredential(c *gin.Context) (raw string, source authTokenSource) {
+	if v := strings.TrimSpace(c.Request.Header.Get("Authorization")); v != "" {
+		return v, authSourceAuthorization
+	}
+	// compatible with Anthropic
+	if v := strings.TrimSpace(c.Request.Header.Get("X-Api-Key")); v != "" {
+		return v, authSourceXAPIKey
+	}
+	// compatible with Azure OpenAI (and GitHub Copilot's `azure` provider type)
+	if v := strings.TrimSpace(c.Request.Header.Get("Api-Key")); v != "" {
+		return v, authSourceAPIKey
 	}
 
 	// For WebSocket upgrade requests, also check subprotocol-based auth.
 	// Browsers cannot set custom headers on WebSocket connections, so the
-	// OpenAI Realtime API allows passing the key as a subprotocol:
-	//   Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.{KEY}, openai-beta.realtime-v1
-	if key == "" {
-		if sp := c.Request.Header.Get("Sec-WebSocket-Protocol"); sp != "" {
-			for _, proto := range strings.Split(sp, ",") {
-				proto = strings.TrimSpace(proto)
-				if strings.HasPrefix(proto, "openai-insecure-api-key.") {
-					key = strings.TrimPrefix(proto, "openai-insecure-api-key.")
-					break
-				}
+	// OpenAI Realtime API allows passing the key as a subprotocol.
+	if sp := c.Request.Header.Get("Sec-WebSocket-Protocol"); sp != "" {
+		for _, proto := range strings.Split(sp, ",") {
+			proto = strings.TrimSpace(proto)
+			if strings.HasPrefix(proto, "openai-insecure-api-key.") {
+				return strings.TrimPrefix(proto, "openai-insecure-api-key."), authSourceWebSocket
 			}
 		}
 	}
 
-	key = strings.TrimPrefix(key, "Bearer ")
+	return "", authSourceNone
+}
+
+// stripAuthScheme removes a leading `Bearer ` authentication scheme from a
+// credential value. Per RFC 7235 the auth-scheme token is case-insensitive,
+// so `Bearer`, `bearer`, `BEARER`, etc. are all accepted. Any surrounding
+// whitespace after the scheme is trimmed so that values such as
+// "Bearer  sk-xxx" (extra spaces) do not corrupt later '-' splitting.
+func stripAuthScheme(key string) string {
+	const scheme = "bearer "
+	if len(key) >= len(scheme) && strings.EqualFold(key[:len(scheme)], scheme) {
+		return strings.TrimSpace(key[len(scheme):])
+	}
+	return key
+}
+
+// parseTokenKey extracts and normalizes the API credential from the request.
+//
+// key like `sk-{token}[-{channelid}]`
+//
+// The returned TokenKeyInfo carries diagnostic metadata (never the raw secret)
+// to help diagnose client authentication problems such as non-standard headers.
+func parseTokenKey(c *gin.Context) TokenKeyInfo {
+	raw, source := extractRawCredential(c)
+
+	key := stripAuthScheme(raw)
+	hadScheme := key != raw
+
 	// Trim current configured prefix first
 	if p := config.TokenKeyPrefix; p != "" {
 		key = strings.TrimPrefix(key, p)
@@ -198,5 +263,121 @@ func GetTokenKeyParts(c *gin.Context) []string {
 	// Backward compatibility with historical prefixes
 	key = strings.TrimPrefix(key, "sk-")
 	key = strings.TrimPrefix(key, "laisky-")
-	return strings.Split(key, "-")
+
+	return TokenKeyInfo{
+		Parts:     splitTokenKeyParts(key),
+		Source:    source,
+		HadScheme: hadScheme,
+	}
+}
+
+// splitTokenKeyParts separates a token key from an optional admin channel suffix.
+// Parameters:
+//   - key: prefix-stripped credential in the form token, token-intChannel, or token-uuidChannel.
+//
+// Return values:
+//   - []string: one element for a plain token or two elements for token and channel reference.
+func splitTokenKeyParts(key string) []string {
+	if token, channelRef, ok := splitTokenKeyUUIDSuffix(key); ok {
+		return []string{token, channelRef}
+	}
+	if token, channelRef, ok := splitTokenKeyIntegerSuffix(key); ok {
+		return []string{token, channelRef}
+	}
+	return []string{key}
+}
+
+// splitTokenKeyUUIDSuffix extracts a final hyphenated UUID channel suffix from a token key.
+// Parameters:
+//   - key: prefix-stripped credential to inspect.
+//
+// Return values:
+//   - string: token portion before the UUID suffix.
+//   - string: UUID channel reference suffix.
+//   - bool: true when a valid final UUID suffix was found.
+func splitTokenKeyUUIDSuffix(key string) (string, string, bool) {
+	const uuidLen = 36
+	if len(key) <= uuidLen+1 {
+		return "", "", false
+	}
+	separator := len(key) - uuidLen - 1
+	if key[separator] != '-' {
+		return "", "", false
+	}
+	token := key[:separator]
+	channelRef := key[separator+1:]
+	if token == "" || !looksHyphenatedUUID(channelRef) {
+		return "", "", false
+	}
+	return token, channelRef, true
+}
+
+// splitTokenKeyIntegerSuffix extracts a final decimal integer channel suffix from a token key.
+// Parameters:
+//   - key: prefix-stripped credential to inspect.
+//
+// Return values:
+//   - string: token portion before the integer suffix.
+//   - string: integer channel reference suffix.
+//   - bool: true when a valid final integer suffix was found.
+func splitTokenKeyIntegerSuffix(key string) (string, string, bool) {
+	idx := strings.LastIndex(key, "-")
+	if idx <= 0 || idx == len(key)-1 {
+		return "", "", false
+	}
+	token := key[:idx]
+	channelRef := key[idx+1:]
+	for _, r := range channelRef {
+		if r < '0' || r > '9' {
+			return "", "", false
+		}
+	}
+	return token, channelRef, true
+}
+
+// looksHyphenatedUUID reports whether ref has canonical hyphenated UUID shape.
+// Parameters:
+//   - ref: candidate UUID string.
+//
+// Return values:
+//   - bool: true when ref is 36 characters with UUID hyphens and hexadecimal digits.
+func looksHyphenatedUUID(ref string) bool {
+	if len(ref) != 36 {
+		return false
+	}
+	for i, r := range ref {
+		switch i {
+		case 8, 13, 18, 23:
+			if r != '-' {
+				return false
+			}
+		default:
+			if !isASCIIHexDigit(r) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// isASCIIHexDigit reports whether r is an ASCII hexadecimal digit.
+// Parameters:
+//   - r: rune to inspect.
+//
+// Return values:
+//   - bool: true when r is 0-9, a-f, or A-F.
+func isASCIIHexDigit(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+}
+
+// GetTokenKeyParts extracts the token key parts from the request credential.
+//
+// key like `sk-{token}[-{channelid}]`
+//
+// It accepts the standard `Authorization: Bearer` header as well as the
+// Anthropic `X-Api-Key` and Azure `Api-Key` headers, and (for WebSocket
+// upgrades) the OpenAI Realtime subprotocol form. The `Bearer` scheme match is
+// case-insensitive (RFC 7235).
+func GetTokenKeyParts(c *gin.Context) []string {
+	return parseTokenKey(c).Parts
 }

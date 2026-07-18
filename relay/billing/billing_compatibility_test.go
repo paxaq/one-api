@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	modelpkg "github.com/songquanpeng/one-api/model"
+	modelpkg "github.com/Laisky/one-api/model"
 )
 
 // TestBackwardCompatibility ensures that the billing refactor doesn't break existing functionality
@@ -34,6 +34,56 @@ func TestBackwardCompatibility(t *testing.T) {
 
 		t.Log("ChatCompletion/Response API PostConsumeQuotaDetailed compatibility test passed")
 	})
+}
+
+// TestOriginModelNamePreserved verifies that OriginModelName is correctly stored in the Log entry
+// when PostConsumeQuotaDetailed is called. This is critical for model mapping transparency.
+func TestOriginModelNamePreserved(t *testing.T) {
+	ctx := context.Background()
+	validTime := time.Unix(1_700_000_000, 0).UTC()
+	logChan := make(chan *modelpkg.Log, 1)
+	originalPostConsume := postConsumeQuotaWithLogFn
+	t.Cleanup(func() {
+		postConsumeQuotaWithLogFn = originalPostConsume
+	})
+	postConsumeQuotaWithLogFn = func(ctx context.Context, tokenId int, quotaDelta int64, totalQuota int64, logEntry *modelpkg.Log, provisionalLogId ...int) {
+		logChan <- logEntry
+	}
+
+	detail := QuotaConsumeDetail{
+		Ctx:                ctx,
+		TokenId:            123,
+		QuotaDelta:         10,
+		TotalQuota:         50,
+		UserId:             1,
+		ChannelId:          5,
+		PromptTokens:       100,
+		CompletionTokens:   50,
+		ModelRatio:         1.0,
+		GroupRatio:         1.0,
+		ModelName:          "gpt-4",
+		OriginModelName:    "my-model",
+		TokenName:          "test-token",
+		IsStream:           false,
+		StartTime:          validTime,
+		SystemPromptReset:  false,
+		CompletionRatio:    1.0,
+		ToolsCost:          0,
+		CachedPromptTokens: 0,
+	}
+
+	PostConsumeQuotaDetailed(detail)
+
+	select {
+	case entry := <-logChan:
+		require.Equal(t, "gpt-4", entry.ModelName)
+		require.Equal(t, "my-model", entry.OriginModelName)
+		require.Equal(t, 100, entry.PromptTokens)
+		require.Equal(t, 50, entry.CompletionTokens)
+		require.NotEmpty(t, entry.Content)
+	case <-time.After(time.Second):
+		require.Fail(t, "expected PostConsumeQuotaDetailed to emit a log entry")
+	}
 }
 
 // TestInputValidation tests that both billing functions properly validate inputs
@@ -82,25 +132,24 @@ func TestInputValidation(t *testing.T) {
 			testFunc: func() bool {
 				defer func() { recover() }()
 				PostConsumeQuotaDetailed(QuotaConsumeDetail{
-					Ctx:                    ctx,
-					TokenId:                123,
-					QuotaDelta:             10,
-					TotalQuota:             50,
-					UserId:                 1,
-					ChannelId:              5,
-					PromptTokens:           -10,
-					CompletionTokens:       20,
-					ModelRatio:             1.0,
-					GroupRatio:             1.0,
-					ModelName:              "test-model",
-					TokenName:              "test-token",
-					IsStream:               false,
-					StartTime:              validTime,
-					SystemPromptReset:      false,
-					CompletionRatio:        1.0,
-					ToolsCost:              0,
-					CachedPromptTokens:     0,
-					CachedCompletionTokens: 0,
+					Ctx:                ctx,
+					TokenId:            123,
+					QuotaDelta:         10,
+					TotalQuota:         50,
+					UserId:             1,
+					ChannelId:          5,
+					PromptTokens:       -10,
+					CompletionTokens:   20,
+					ModelRatio:         1.0,
+					GroupRatio:         1.0,
+					ModelName:          "test-model",
+					TokenName:          "test-token",
+					IsStream:           false,
+					StartTime:          validTime,
+					SystemPromptReset:  false,
+					CompletionRatio:    1.0,
+					ToolsCost:          0,
+					CachedPromptTokens: 0,
 				})
 				return true
 			},

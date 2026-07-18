@@ -2,15 +2,16 @@ package quota
 
 import (
 	"math"
+	"time"
 
 	"github.com/Laisky/zap"
 
-	"github.com/songquanpeng/one-api/common/logger"
-	modelcfg "github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/adaptor"
-	billingratio "github.com/songquanpeng/one-api/relay/billing/ratio"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
-	"github.com/songquanpeng/one-api/relay/pricing"
+	"github.com/Laisky/one-api/common/logger"
+	modelcfg "github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/adaptor"
+	billingratio "github.com/Laisky/one-api/relay/billing/ratio"
+	relaymodel "github.com/Laisky/one-api/relay/model"
+	"github.com/Laisky/one-api/relay/pricing"
 )
 
 // ComputeInput describes all parameters required to calculate quota consumption
@@ -24,18 +25,18 @@ type ComputeInput struct {
 	ChannelModelConfigs    map[string]modelcfg.ModelConfigLocal
 	ChannelCompletionRatio map[string]float64
 	PricingAdaptor         adaptor.Adaptor
+	RequestTime            time.Time
 }
 
 // ComputeResult captures the outcome of a quota calculation, including
 // normalized ratios used and cached token details.
 type ComputeResult struct {
-	TotalQuota             int64
-	PromptTokens           int
-	CompletionTokens       int
-	CachedPromptTokens     int
-	CachedCompletionTokens int
-	UsedModelRatio         float64
-	UsedCompletionRatio    float64
+	TotalQuota          int64
+	PromptTokens        int
+	CompletionTokens    int
+	CachedPromptTokens  int
+	UsedModelRatio      float64
+	UsedCompletionRatio float64
 }
 
 // Compute calculates the quota required for the provided usage snapshot.
@@ -51,10 +52,10 @@ func Compute(input ComputeInput) ComputeResult {
 	completionTokens := usage.CompletionTokens
 
 	pricingAdaptor := input.PricingAdaptor
-	resolvedModelCfg, hasResolvedModelCfg := pricing.ResolveModelConfigRatioOnly(input.ModelName, input.ChannelModelConfigs, pricingAdaptor)
-	hasChannelModelRatioOverride := hasOverrideForModel(input.ModelName, input.ChannelModelRatio)
+	resolvedModelCfg, hasResolvedModelCfg := pricing.ResolveModelConfigRatioOnly(input.ModelName, input.ChannelModelConfigs, pricingAdaptor, input.RequestTime)
+	hasChannelModelRatioOverride := hasModelRatioFlatOverride(input.ModelName, input.ChannelModelRatio, input.ChannelModelConfigs)
 	baseRatio := input.ModelRatio
-	completionRatioResolved := resolveCompletionRatio(input.ModelName, resolvedModelCfg, hasResolvedModelCfg, input.ChannelCompletionRatio, pricingAdaptor)
+	completionRatioResolved := resolveCompletionRatio(input.ModelName, resolvedModelCfg, hasResolvedModelCfg, input.ChannelCompletionRatio, input.ChannelModelConfigs, pricingAdaptor, input.RequestTime)
 
 	if hasResolvedModelCfg {
 		// Preserve legacy fallback behavior: when channel config omits base ratio/completion
@@ -215,23 +216,28 @@ func Compute(input ComputeInput) ComputeResult {
 	}
 
 	return ComputeResult{
-		TotalQuota:             totalQuota,
-		PromptTokens:           promptTokens,
-		CompletionTokens:       completionTokens,
-		CachedPromptTokens:     cachedPrompt,
-		CachedCompletionTokens: 0,
-		UsedModelRatio:         usedModelRatio,
-		UsedCompletionRatio:    usedCompletionRatio,
+		TotalQuota:          totalQuota,
+		PromptTokens:        promptTokens,
+		CompletionTokens:    completionTokens,
+		CachedPromptTokens:  cachedPrompt,
+		UsedModelRatio:      usedModelRatio,
+		UsedCompletionRatio: usedCompletionRatio,
 	}
 }
 
-// hasOverrideForModel reports whether overrides contains modelName, preserving explicit zero values.
-func hasOverrideForModel(modelName string, overrides map[string]float64) bool {
+// hasModelRatioFlatOverride reports whether overrides contains a true legacy flat model-ratio override.
+// Parameters: modelName names the model, overrides contains scalar ratios, and channelConfigs contains modern JSON configs.
+// Returns: true when the scalar override should keep precedence over windowed base ratios.
+func hasModelRatioFlatOverride(modelName string, overrides map[string]float64, channelConfigs map[string]modelcfg.ModelConfigLocal) bool {
 	if overrides == nil {
 		return false
 	}
-	_, ok := overrides[modelName]
-	return ok
+	override, ok := overrides[modelName]
+	if !ok {
+		return false
+	}
+	local, hasConfig := channelConfigs[modelName]
+	return !hasConfig || len(local.TimeWindows) == 0 || local.Ratio == 0 || local.Ratio != override
 }
 
 // resolveCompletionRatio returns the effective completion ratio for modelName.
@@ -242,15 +248,20 @@ func resolveCompletionRatio(
 	resolvedModelCfg adaptor.ModelConfig,
 	hasResolvedModelCfg bool,
 	channelOverrides map[string]float64,
+	channelConfigs map[string]modelcfg.ModelConfigLocal,
 	provider adaptor.Adaptor,
+	at time.Time,
 ) float64 {
 	if override, ok := channelOverrides[modelName]; ok {
-		return override
+		local, hasConfig := channelConfigs[modelName]
+		if !hasConfig || len(local.TimeWindows) == 0 || local.CompletionRatio == 0 || local.CompletionRatio != override {
+			return override
+		}
 	}
 	if hasResolvedModelCfg && resolvedModelCfg.CompletionRatio != 0 {
 		return resolvedModelCfg.CompletionRatio
 	}
-	return pricing.GetCompletionRatioWithThreeLayers(modelName, channelOverrides, provider)
+	return pricing.ResolveCompletionRatioAt(modelName, nil, channelOverrides, provider, at)
 }
 
 // isClaudeModelName reports whether modelName contains the ASCII token "claude" regardless of case.

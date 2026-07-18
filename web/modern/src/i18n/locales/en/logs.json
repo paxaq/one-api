@@ -14,7 +14,6 @@
       "cache_write_1h": "Cache Write 1h Tokens",
       "cache_write_5m": "Cache Write 5m Tokens",
       "channel": "Channel",
-      "completion_tokens_cached": "Completion Tokens (cached)",
       "completion_tokens_output": "Completion Tokens (output)",
       "content": "Content",
       "copied": "Copied!",
@@ -48,10 +47,11 @@
       "no_content": "No content recorded.",
       "no_timeline": "Timeline data is not available for this trace.",
       "no_tracing": "Tracing data is not available for this log entry.",
+      "origin_model": "Requested Model",
       "prompt_tokens_cached": "Prompt Tokens (cached)",
       "prompt_tokens_input": "Prompt Tokens (input)",
-      "quota": "Quota",
-      "quota_raw": "Quota (raw units)",
+      "quota": "Expense",
+      "quota_raw": "Quota",
       "recorded_at": "Recorded at",
       "request_id": "Request ID",
       "request_info": "Request Information",
@@ -63,7 +63,6 @@
       "timeline": "Request Timeline",
       "title": "Log Entry Details",
       "token": "Token",
-      "total_cached_tokens": "Total Cached Tokens",
       "total_time": "Total Request Time",
       "total_tokens": "Total Tokens",
       "trace_id": "Trace ID",
@@ -76,12 +75,12 @@
       "headers": {
         "cache_write_1h": "Cache Write (1h)",
         "cache_write_5m": "Cache Write (5m)",
-        "cached_completion_tokens": "Cached Completion Tokens",
         "cached_prompt_tokens": "Cached Prompt Tokens",
         "completion_tokens": "Completion Tokens",
         "content": "Content",
         "latency": "Latency",
         "model": "Model",
+        "origin_model": "Requested Model",
         "prompt_tokens": "Prompt Tokens",
         "quota": "Quota",
         "time": "Time",
@@ -110,6 +109,12 @@
       "missing": "Unknown",
       "not_available": "N/A"
     },
+    "notifications": {
+      "clear_failed_message": "Failed to clear logs.",
+      "clear_failed_title": "Clear failed",
+      "clear_success_message": "Logs cleared successfully.",
+      "clear_success_title": "Logs cleared"
+    },
     "search": {
       "log_entry": "Log Entry",
       "quota": "Quota: {{value}}"
@@ -124,6 +129,7 @@
       "empty": "No logs found matching your criteria.",
       "latency": "Latency",
       "model": "Model",
+      "origin_model": "Requested Model",
       "prompt": "Prompt",
       "time": "Time",
       "token": "Token",
@@ -144,6 +150,7 @@
       "manage": "Manage",
       "system": "System",
       "test": "Test",
+      "tool": "Tool",
       "topup": "Top Up",
       "unknown": "Unknown"
     }

@@ -1,4 +1,4 @@
-import type { NormalizedToolingConfig, ToolPricingEntry } from './schemas';
+import type { ChannelConfigForm, ChannelForm, NormalizedToolingConfig, ToolPricingEntry } from './schemas';
 
 export const normalizeChannelType = (value: unknown): number | null => {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -90,11 +90,110 @@ export const findPricingEntryCaseInsensitive = (
   return { key: matchedKey, entry: pricing[matchedKey] };
 };
 
-// JSON validation functions
+// Admin-entered JSON inputs are JSONC-flavoured: they may include `//` and
+// `/* */` comments and trailing commas for better authoring ergonomics. The
+// helpers below normalise the text into strict JSON before `JSON.parse`, and
+// are also used at submit time so the backend only ever sees canonical JSON.
+
+const stripJsonComments = (input: string): string => {
+  let output = '';
+  let i = 0;
+  const n = input.length;
+  let inString = false;
+  while (i < n) {
+    const ch = input[i];
+    const next = i + 1 < n ? input[i + 1] : '';
+    if (inString) {
+      output += ch;
+      if (ch === '\\' && i + 1 < n) {
+        output += input[i + 1];
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      output += ch;
+      i++;
+      continue;
+    }
+    if (ch === '/' && next === '/') {
+      i += 2;
+      while (i < n && input[i] !== '\n' && input[i] !== '\r') i++;
+      continue;
+    }
+    if (ch === '/' && next === '*') {
+      i += 2;
+      while (i < n && !(input[i] === '*' && input[i + 1] === '/')) i++;
+      if (i < n) i += 2;
+      continue;
+    }
+    output += ch;
+    i++;
+  }
+  return output;
+};
+
+const stripTrailingCommas = (input: string): string => {
+  let output = '';
+  let i = 0;
+  const n = input.length;
+  let inString = false;
+  while (i < n) {
+    const ch = input[i];
+    if (inString) {
+      output += ch;
+      if (ch === '\\' && i + 1 < n) {
+        output += input[i + 1];
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      output += ch;
+      i++;
+      continue;
+    }
+    if (ch === ',') {
+      let j = i + 1;
+      while (j < n && /\s/.test(input[j])) j++;
+      if (j < n && (input[j] === '}' || input[j] === ']')) {
+        i++;
+        continue;
+      }
+    }
+    output += ch;
+    i++;
+  }
+  return output;
+};
+
+/**
+ * sanitizeJsonInput converts admin-entered JSONC (JSON with line and block
+ * comments and trailing commas) into strict JSON. Safe to call on empty or
+ * already-clean input.
+ */
+export const sanitizeJsonInput = (jsonString: string): string => {
+  if (!jsonString) return jsonString;
+  return stripTrailingCommas(stripJsonComments(jsonString));
+};
+
+// JSON validation functions (accept JSONC-flavoured input)
 export const isValidJSON = (jsonString: string) => {
   if (!jsonString || jsonString.trim() === '') return true;
   try {
-    JSON.parse(jsonString);
+    JSON.parse(sanitizeJsonInput(jsonString));
     return true;
   } catch (_e) {
     return false;
@@ -104,12 +203,29 @@ export const isValidJSON = (jsonString: string) => {
 export const formatJSON = (jsonString: string) => {
   if (!jsonString || jsonString.trim() === '') return '';
   try {
-    const parsed = JSON.parse(jsonString);
+    const parsed = JSON.parse(sanitizeJsonInput(jsonString));
     return JSON.stringify(parsed, null, 2);
   } catch (_e) {
     return jsonString;
   }
 };
+
+/**
+ * sanitizeJsonField returns canonical JSON if the input parses as JSONC,
+ * otherwise returns the original string so the backend can surface the
+ * validation error. Empty/whitespace inputs pass through unchanged.
+ */
+export const sanitizeJsonField = (jsonString: string): string => {
+  if (!jsonString || jsonString.trim() === '') return jsonString;
+  try {
+    const parsed = JSON.parse(sanitizeJsonInput(jsonString));
+    return JSON.stringify(parsed);
+  } catch (_e) {
+    return jsonString;
+  }
+};
+
+const isClockHHMM = (value: unknown): value is string => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
 
 // Enhanced model configs validation
 export const validateModelConfigs = (configStr: string) => {
@@ -118,7 +234,7 @@ export const validateModelConfigs = (configStr: string) => {
   }
 
   try {
-    const configs = JSON.parse(configStr);
+    const configs = JSON.parse(sanitizeJsonInput(configStr));
 
     if (typeof configs !== 'object' || configs === null || Array.isArray(configs)) {
       return { valid: false, error: 'Model configs must be a JSON object' };
@@ -167,8 +283,39 @@ export const validateModelConfigs = (configStr: string) => {
         }
       }
 
+      if (configObj.time_windows !== undefined) {
+        if (!Array.isArray(configObj.time_windows)) {
+          return { valid: false, error: `Invalid time_windows for model "${modelName}": must be an array` };
+        }
+        for (const [index, window] of configObj.time_windows.entries()) {
+          if (typeof window !== 'object' || window === null || Array.isArray(window)) {
+            return { valid: false, error: `Invalid time window ${index + 1} for model "${modelName}": must be an object` };
+          }
+          const windowObj = window as any;
+          if (!Array.isArray(windowObj.ranges) || windowObj.ranges.length === 0) {
+            return { valid: false, error: `Invalid time window ${index + 1} for model "${modelName}": ranges must be a non-empty array` };
+          }
+          for (const range of windowObj.ranges) {
+            if (typeof range !== 'object' || range === null || !isClockHHMM((range as any).start) || !isClockHHMM((range as any).end)) {
+              return { valid: false, error: `Invalid time window ${index + 1} for model "${modelName}": ranges must use HH:MM strings` };
+            }
+          }
+          if (
+            windowObj.overlay === undefined ||
+            typeof windowObj.overlay !== 'object' ||
+            windowObj.overlay === null ||
+            Array.isArray(windowObj.overlay)
+          ) {
+            return { valid: false, error: `Invalid time window ${index + 1} for model "${modelName}": overlay must be an object` };
+          }
+        }
+      }
+
       const hasPricingField =
-        configObj.ratio !== undefined || configObj.completion_ratio !== undefined || configObj.max_tokens !== undefined;
+        configObj.ratio !== undefined ||
+        configObj.completion_ratio !== undefined ||
+        configObj.max_tokens !== undefined ||
+        (Array.isArray(configObj.time_windows) && configObj.time_windows.length > 0);
       if (!hasPricingField) {
         return {
           valid: false,
@@ -192,7 +339,7 @@ export const validateToolingConfig = (configStr: string) => {
   }
 
   try {
-    const config = JSON.parse(configStr);
+    const config = JSON.parse(sanitizeJsonInput(configStr));
     if (typeof config !== 'object' || config === null || Array.isArray(config)) {
       return { valid: false, error: 'Tooling config must be a JSON object' };
     }
@@ -287,17 +434,126 @@ export const validateToolingConfig = (configStr: string) => {
   }
 };
 
+/**
+ * BuildChannelSubmitPayloadOptions captures all the contextual flags that
+ * influence the shape of the payload but are not part of the form data
+ * itself. Keeping this separate from `ChannelForm` lets us unit-test the
+ * transformation without spinning up the React hook.
+ */
+export interface BuildChannelSubmitPayloadOptions {
+  /** True when editing an existing channel (PUT). False on create (POST). */
+  isEdit: boolean;
+  /** Currently selected channel type (mirrors `form.watch('type')`). */
+  watchType: number | null | undefined;
+  /** Live config values used to derive composite key fields. */
+  watchConfig: ChannelConfigForm;
+}
+
+/**
+ * buildChannelSubmitPayload transforms a validated `ChannelForm` plus
+ * contextual flags into the exact payload object that should be sent to
+ * the backend. It is intentionally pure: no network, no validation, no
+ * error throwing for user-visible issues. Validation is performed by the
+ * caller before invoking this helper.
+ *
+ * Key behaviours that are locked-in by tests:
+ *  - On edit, an empty `key` is REMOVED from the payload so the backend
+ *    treats it as "do not change".
+ *  - For nullable JSON-ish fields (`model_mapping`, `model_configs`,
+ *    `inference_profile_arn_map`, `system_prompt`), an empty user input is
+ *    serialised as JSON `null` (key present, value `null`) so the backend
+ *    can distinguish "clear me" from "leave me alone".
+ *  - JSONC inputs are sanitised to strict JSON.
+ */
+export const buildChannelSubmitPayload = (data: ChannelForm, opts: BuildChannelSubmitPayloadOptions): Record<string, any> => {
+  const { isEdit, watchType, watchConfig } = opts;
+  const payload: Record<string, any> = { ...data };
+
+  // Composite key handling for channel types that pack multiple credentials.
+  if (watchType === 33 && watchConfig?.ak && watchConfig?.sk && watchConfig?.region) {
+    payload.key = `${watchConfig.ak}|${watchConfig.sk}|${watchConfig.region}`;
+  } else if (watchType === 42 && watchConfig?.region && watchConfig?.vertex_ai_project_id && watchConfig?.vertex_ai_adc) {
+    payload.key = `${watchConfig.region}|${watchConfig.vertex_ai_project_id}|${watchConfig.vertex_ai_adc}`;
+  } else if (watchType === 18 && (watchConfig?.spark_app_id || watchConfig?.spark_api_secret || watchConfig?.spark_api_key)) {
+    payload.key = `${watchConfig.spark_app_id || ''}|${watchConfig.spark_api_secret || ''}|${watchConfig.spark_api_key || ''}`;
+  } else if (watchType === 23 && (watchConfig?.tencent_app_id || watchConfig?.tencent_secret_id || watchConfig?.tencent_secret_key)) {
+    payload.key = `${watchConfig.tencent_app_id || ''}|${watchConfig.tencent_secret_id || ''}|${watchConfig.tencent_secret_key || ''}`;
+  }
+
+  payload.priority = toInt(payload.priority, 0);
+  payload.weight = toInt(payload.weight, 0);
+  payload.ratelimit = toInt(payload.ratelimit, 0);
+
+  payload.models = Array.isArray(payload.models) ? payload.models.join(',') : '';
+
+  const normalizedHiddenModels = [...new Set((data.hidden_models || []).map((model) => model.trim()).filter((model) => model !== ''))];
+  payload.hidden_models = normalizedHiddenModels.length > 0 ? JSON.stringify(normalizedHiddenModels) : null;
+
+  payload.group = Array.isArray(payload.groups) ? payload.groups.join(',') : '';
+  delete payload.groups;
+
+  payload.config = JSON.stringify(data.config);
+
+  // On edit, an empty key signals "leave the existing key alone". Drop the
+  // field entirely so the backend's partial-update logic skips it.
+  if (isEdit && (typeof payload.key !== 'string' || payload.key.trim() === '')) {
+    delete payload.key;
+  }
+
+  const baseURLRawValue = typeof payload.base_url === 'string' ? payload.base_url : '';
+  let trimmedBaseURL = baseURLRawValue.trim();
+  if (trimmedBaseURL.endsWith('/')) {
+    trimmedBaseURL = trimmedBaseURL.slice(0, -1);
+  }
+  payload.base_url = trimmedBaseURL;
+
+  // Azure (type 3) requires an api_version-like value in `other`. Apply a
+  // reasonable default so existing callers keep working without manual entry.
+  if (watchType === 3 && (typeof payload.other !== 'string' || payload.other.trim() === '')) {
+    payload.other = '2024-03-01-preview';
+  }
+
+  const jsoncFields = ['model_mapping', 'model_configs', 'inference_profile_arn_map', 'tooling'];
+  jsoncFields.forEach((field) => {
+    const v = payload[field];
+    if (typeof v === 'string' && v.trim() !== '') {
+      payload[field] = sanitizeJsonField(v);
+    }
+  });
+
+  if (watchType === 34 && watchConfig?.auth_type === 'oauth_jwt' && typeof payload.key === 'string' && payload.key.trim() !== '') {
+    payload.key = sanitizeJsonField(payload.key);
+  }
+
+  // CRITICAL: when the user clears any of these fields, send JSON `null`
+  // (key present, value null) — NOT undefined, NOT missing. The backend
+  // relies on the field key being present in the JSON body to know the
+  // user wants to clear it; omitting the key would leave the existing
+  // value untouched.
+  const nullableEmptyFields = ['model_mapping', 'model_configs', 'inference_profile_arn_map', 'system_prompt'];
+  nullableEmptyFields.forEach((field) => {
+    const v = payload[field];
+    if (typeof v === 'string' && v.trim() === '') {
+      payload[field] = null;
+    }
+  });
+
+  return payload;
+};
+
 // Helper function to get key prompt based on channel type
 export const getKeyPrompt = (type: number) => {
   switch (type) {
     case 15:
-      return 'Please enter Baidu API Key and Secret Key in format: API_KEY|SECRET_KEY';
+      return 'APIKey|SecretKey';
     case 18:
-      return 'Please enter iFlytek App ID, API Secret, and API Key in format: APPID|API_SECRET|API_KEY';
+      return 'APPID|APISecret|APIKey';
     case 22:
-      return 'Please enter FastGPT API Key';
+      return 'APIKey-AppId (e.g., fastgpt-0sp2gtvfdgyi4k30jwlgwf1i-64f335d84283f05518e9e041)';
     case 23:
-      return 'Please enter Tencent SecretId and SecretKey in format: SECRET_ID|SECRET_KEY';
+      return 'AppId|SecretId|SecretKey';
+    case 26:
+      return 'APIKey|SecretKey';
     case 53:
       return 'Please enter a GitHub access token (PAT or OAuth token) with an active Copilot subscription';
     default:

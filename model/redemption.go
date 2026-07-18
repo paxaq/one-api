@@ -6,9 +6,10 @@ import (
 
 	"github.com/Laisky/errors/v2"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/helper"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/helper"
 )
 
 const (
@@ -18,17 +19,19 @@ const (
 )
 
 type Redemption struct {
-	Id           int    `json:"id"`
-	UserId       int    `json:"user_id"`
-	Key          string `json:"key" gorm:"type:char(32);uniqueIndex"`
-	Status       int    `json:"status" gorm:"default:1"`
-	Name         string `json:"name" gorm:"index"`
-	Quota        int64  `json:"quota" gorm:"bigint;default:100"`
-	CreatedTime  int64  `json:"created_time" gorm:"bigint"`
-	RedeemedTime int64  `json:"redeemed_time" gorm:"bigint"`
-	Count        int    `json:"count" gorm:"-:all"` // only for api request
-	CreatedAt    int64  `json:"created_at" gorm:"bigint;autoCreateTime:milli"`
-	UpdatedAt    int64  `json:"updated_at" gorm:"bigint;autoUpdateTime:milli"`
+	Id           int     `json:"id"`
+	UUID         string  `json:"uuid" gorm:"type:char(36);column:uuid"`
+	UserId       int     `json:"user_id"`
+	UserUUID     *string `json:"user_uuid" gorm:"type:char(36);column:user_uuid;index"`
+	Key          string  `json:"key" gorm:"type:char(32);uniqueIndex"`
+	Status       int     `json:"status" gorm:"default:1"`
+	Name         string  `json:"name" gorm:"index"`
+	Quota        int64   `json:"quota" gorm:"bigint;default:100"`
+	CreatedTime  int64   `json:"created_time" gorm:"bigint"`
+	RedeemedTime int64   `json:"redeemed_time" gorm:"bigint"`
+	Count        int     `json:"count" gorm:"-:all"` // only for api request
+	CreatedAt    int64   `json:"created_at" gorm:"bigint;autoCreateTime:milli"`
+	UpdatedAt    int64   `json:"updated_at" gorm:"bigint;autoUpdateTime:milli"`
 }
 
 var redemptionSortFields = map[string]string{
@@ -46,22 +49,31 @@ func GetAllRedemptions(startIdx int, num int) ([]*Redemption, error) {
 	var redemptions []*Redemption
 	var err error
 	err = DB.Order("id desc").Limit(num).Offset(startIdx).Find(&redemptions).Error
-	return redemptions, err
+	if err != nil {
+		return nil, errors.Wrap(err, "get all redemptions")
+	}
+	return redemptions, nil
 }
 
 func GetRedemptionCount() (count int64, err error) {
 	err = DB.Model(&Redemption{}).Count(&count).Error
-	return count, err
+	if err != nil {
+		return 0, errors.Wrap(err, "count redemptions")
+	}
+	return count, nil
 }
 
 func SearchRedemptions(keyword string, startIdx int, num int, sortBy string, sortOrder string) (redemptions []*Redemption, total int64, err error) {
 	db := DB.Model(&Redemption{})
 	if keyword != "" {
-		db = db.Where("id = ? or name LIKE ?", keyword, keyword+"%")
+		db = db.Where("id = ? or name LIKE ? or uuid = ?", helper.String2Int(keyword), keyword+"%", normalizeUUIDKeyword(keyword))
 	}
 	db = db.Order(ValidateOrderClause(sortBy, sortOrder, redemptionSortFields, "id desc"))
 	err = db.Count(&total).Limit(num).Offset(startIdx).Find(&redemptions).Error
-	return redemptions, total, err
+	if err != nil {
+		return nil, 0, errors.Wrap(err, "search redemptions")
+	}
+	return redemptions, total, nil
 }
 
 func GetRedemptionById(id int) (*Redemption, error) {
@@ -71,7 +83,10 @@ func GetRedemptionById(id int) (*Redemption, error) {
 	redemption := Redemption{Id: id}
 	var err error = nil
 	err = DB.First(&redemption, "id = ?", id).Error
-	return &redemption, err
+	if err != nil {
+		return nil, errors.Wrapf(err, "get redemption by id %d", id)
+	}
+	return &redemption, nil
 }
 
 func Redeem(ctx context.Context, key string, userId int) (quota int64, err error) {
@@ -89,22 +104,53 @@ func Redeem(ctx context.Context, key string, userId int) (quota int64, err error
 	}
 
 	err = DB.Transaction(func(tx *gorm.DB) error {
-		err := tx.Set("gorm:query_option", "FOR UPDATE").Where(keyCol+" = ?", key).First(redemption).Error
+		// 1. Read the row with a row-level lock. clause.Locking is the
+		//    GORM-v2 API for `SELECT ... FOR UPDATE`; the previous
+		//    `tx.Set("gorm:query_option", "FOR UPDATE")` was a GORM-v1
+		//    hook key that v2 silently ignores, so without this line two
+		//    concurrent callers could both pass the status check below.
+		//    On SQLite the lock is a no-op but the CAS step (2) still
+		//    guarantees correctness.
+		err := tx.Clauses(clause.Locking{Strength: clause.LockingStrengthUpdate}).
+			Where(keyCol+" = ?", key).
+			First(redemption).Error
 		if err != nil {
 			return errors.New("Invalid redemption code")
 		}
 		if redemption.Status != RedemptionCodeStatusEnabled {
 			return errors.New("The redemption code has been used")
 		}
-		err = tx.Model(&User{}).Where("id = ?", userId).Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
+
+		// 2. Compare-and-swap claim of the redemption row. The WHERE on
+		//    status = Enabled is the critical safety net: even if a peer
+		//    transaction snuck past the FOR UPDATE on a backend where it
+		//    is unsupported, only one UPDATE can flip the row from
+		//    Enabled to Used. RowsAffected == 0 means we lost the race.
+		now := helper.GetTimestamp()
+		claim := tx.Model(&Redemption{}).
+			Where("id = ? AND status = ?", redemption.Id, RedemptionCodeStatusEnabled).
+			Updates(map[string]any{
+				"status":        RedemptionCodeStatusUsed,
+				"redeemed_time": now,
+			})
+		if claim.Error != nil {
+			return errors.Wrap(claim.Error, "claim redemption")
+		}
+		if claim.RowsAffected == 0 {
+			return errors.New("The redemption code has been used")
+		}
+
+		// 3. Only after we own the row do we credit the user. Doing this
+		//    last means a failed CAS leaves the user untouched.
+		err = tx.Model(&User{}).Where("id = ?", userId).
+			Update("quota", gorm.Expr("quota + ?", redemption.Quota)).Error
 		if err != nil {
 			return errors.Wrapf(err, "increase user %d quota with redemption", userId)
 		}
-		redemption.RedeemedTime = helper.GetTimestamp()
+
+		// Reflect the persisted state for the audit log emitted below.
+		redemption.RedeemedTime = now
 		redemption.Status = RedemptionCodeStatusUsed
-		if err = tx.Save(redemption).Error; err != nil {
-			return errors.Wrap(err, "update redemption status")
-		}
 		return nil
 	})
 	if err != nil {

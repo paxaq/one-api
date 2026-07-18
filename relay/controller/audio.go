@@ -17,19 +17,19 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/client"
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/common/graceful"
-	"github.com/songquanpeng/one-api/common/helper"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai"
-	"github.com/songquanpeng/one-api/relay/billing"
-	"github.com/songquanpeng/one-api/relay/channeltype"
-	"github.com/songquanpeng/one-api/relay/meta"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
-	"github.com/songquanpeng/one-api/relay/pricing"
-	"github.com/songquanpeng/one-api/relay/relaymode"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/client"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/common/graceful"
+	"github.com/Laisky/one-api/common/helper"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/adaptor/openai"
+	"github.com/Laisky/one-api/relay/billing"
+	"github.com/Laisky/one-api/relay/channeltype"
+	"github.com/Laisky/one-api/relay/meta"
+	relaymodel "github.com/Laisky/one-api/relay/model"
+	"github.com/Laisky/one-api/relay/pricing"
+	"github.com/Laisky/one-api/relay/relaymode"
 )
 
 type commonAudioRequest struct {
@@ -126,11 +126,11 @@ func RelayAudioHelper(c *gin.Context, relayMode int) *relaymodel.ErrorWithStatus
 
 	// Use three-layer pricing system
 	pricingAdaptor := resolvePricingAdaptor(meta)
-	modelRatio := pricing.GetModelRatioWithThreeLayers(audioModel, channelModelRatio, pricingAdaptor)
+	modelRatio := pricing.ResolveModelRatioAt(audioModel, channelModelConfigs, channelModelRatio, pricingAdaptor, meta.StartTime)
 	groupRatio := c.GetFloat64(ctxkey.ChannelRatio)
 	ratio := modelRatio * groupRatio
 
-	audioPricingCfg, hasAudioPricing := pricing.ResolveAudioPricing(audioModel, channelModelConfigs, pricingAdaptor)
+	audioPricingCfg, hasAudioPricing := pricing.ResolveAudioPricing(audioModel, channelModelConfigs, pricingAdaptor, meta.StartTime)
 	tokensPerSecond := pricing.DefaultAudioPromptTokensPerSecond
 	if hasAudioPricing && audioPricingCfg != nil && audioPricingCfg.PromptTokensPerSecond > 0 {
 		tokensPerSecond = audioPricingCfg.PromptTokensPerSecond
@@ -194,13 +194,7 @@ func RelayAudioHelper(c *gin.Context, relayMode int) *relaymodel.ErrorWithStatus
 		markBillingReconciled(c)
 		if preConsumedQuota > 0 {
 			// we need to roll back the pre-consumed quota under lifecycle tracking
-			defer func() {
-				graceful.GoCritical(ctx, "audioRollbackPreConsumed", func(cctx context.Context) {
-					if err := model.PostConsumeTokenQuota(cctx, tokenId, -preConsumedQuota); err != nil {
-						gmw.GetLogger(cctx).Error("error rollback pre-consumed quota", zap.Error(err))
-					}
-				})
-			}()
+			goAudioRollbackPreConsumed(c, tokenId, preConsumedQuota)
 		}
 	}()
 
@@ -359,18 +353,21 @@ func RelayAudioHelper(c *gin.Context, relayMode int) *relaymodel.ErrorWithStatus
 	}
 
 	defer func() {
-		bgctx, cancel := context.WithTimeout(gmw.BackgroundCtx(c), time.Minute)
+		bgctx, cancel := context.WithTimeout(detachForBilling(c), time.Minute)
 		defer cancel()
 
 		// Build a full log entry with IDs from gin.Context
 		logContent := fmt.Sprintf("model rate %.2f, group rate %.2f", modelRatio, groupRatio)
 		entry := &model.Log{
 			UserId:           userId,
+			UserUUID:         model.StringPtrIfNotEmpty(meta.UserUUID),
 			ChannelId:        channelId,
+			ChannelUUID:      model.StringPtrIfNotEmpty(meta.ChannelUUID),
 			PromptTokens:     int(quota), // audio API logs total as prompt tokens
 			CompletionTokens: 0,
 			ModelName:        audioModel,
 			TokenName:        tokenName,
+			TokenUUID:        model.StringPtrIfNotEmpty(meta.TokenUUID),
 			Content:          logContent,
 			RequestId:        c.GetString(ctxkey.RequestId),
 			TraceId:          traceID,
@@ -400,6 +397,24 @@ func RelayAudioHelper(c *gin.Context, relayMode int) *relaymodel.ErrorWithStatus
 		return openai.ErrorWrapper(err, "close_response_body_failed", http.StatusInternalServerError)
 	}
 	return nil
+}
+
+// audioRollbackGateForTest, when non-nil, blocks the rollback goroutine spawned by
+// goAudioRollbackPreConsumed until the channel is closed. audioRollbackObservedCtxErrForTest,
+// when non-nil, records the context error observed by the rollback goroutine before it
+// performs the refund DB write. Both are test seams to verify the rollback goroutine runs
+// on a non-cancelled context after the request context is cancelled; they are always nil in
+// production builds.
+var audioRollbackGateForTest chan struct{}
+var audioRollbackObservedCtxErrForTest func(error)
+
+// goAudioRollbackPreConsumed refunds the pre-consumed quota of a failed audio request.
+// It delegates to the shared goRollbackPreConsumed, which runs on a detached, c-free
+// context (see that function for why). The test seams are snapshotted here on the
+// request goroutine and passed by value.
+func goAudioRollbackPreConsumed(c *gin.Context, tokenId int, preConsumedQuota int64) {
+	goRollbackPreConsumed(c, "audioRollbackPreConsumed", tokenId, preConsumedQuota,
+		audioRollbackGateForTest, audioRollbackObservedCtxErrForTest)
 }
 
 func getTextFromVTT(body []byte) (string, error) {

@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/songquanpeng/one-api/relay/relaymode"
+	"github.com/Laisky/one-api/relay/relaymode"
 )
 
 // Endpoint represents an API endpoint type that can be enabled/disabled per channel.
@@ -311,7 +311,12 @@ func DefaultEndpointsForChannelType(channelType int) []Endpoint {
 	case TogetherAI:
 		return []Endpoint{
 			EndpointChatCompletions,
+			EndpointCompletions,
 			EndpointEmbeddings,
+			EndpointImagesGenerations,
+			EndpointAudioSpeech,
+			EndpointAudioTranscription,
+			EndpointAudioTranslation,
 			EndpointResponseAPI,
 			EndpointClaudeMessages,
 		}
@@ -353,6 +358,41 @@ func DefaultEndpointsForChannelType(channelType int) []Endpoint {
 		return []Endpoint{
 			EndpointChatCompletions,
 			EndpointImagesGenerations,
+			EndpointResponseAPI,
+			EndpointClaudeMessages,
+		}
+	case Fireworks:
+		// Fireworks natively serves chat completions, text completions,
+		// embeddings, rerank, the Responses API, and an Anthropic-compatible
+		// Messages endpoint under a single Bearer-authenticated base URL.
+		return []Endpoint{
+			EndpointChatCompletions,
+			EndpointCompletions,
+			EndpointEmbeddings,
+			EndpointRerank,
+			EndpointResponseAPI,
+			EndpointClaudeMessages,
+		}
+	case NVIDIA:
+		// NVIDIA's hosted API (https://integrate.api.nvidia.com/v1) natively serves
+		// OpenAI-compatible chat completions. The Responses API and Anthropic
+		// Messages surfaces are provided through one-api's shared OpenAI-compatible
+		// conversion/fallback layer rather than upstream-native. Embeddings are not
+		// advertised by default until NVIDIA's model-specific input_type requirements
+		// are represented in the model catalog.
+		return []Endpoint{
+			EndpointChatCompletions,
+			EndpointResponseAPI,
+			EndpointClaudeMessages,
+		}
+	case Cerebras:
+		// Cerebras' OpenAI-compatible API (https://api.cerebras.ai/v1) natively
+		// serves Chat Completions only. The Responses API and Anthropic Messages
+		// surfaces are provided through one-api's shared OpenAI-compatible
+		// conversion/fallback layer rather than upstream-native. Cerebras does
+		// not expose embeddings.
+		return []Endpoint{
+			EndpointChatCompletions,
 			EndpointResponseAPI,
 			EndpointClaudeMessages,
 		}

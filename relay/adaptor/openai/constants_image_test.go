@@ -5,7 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/songquanpeng/one-api/relay/billing/ratio"
+	"github.com/Laisky/one-api/relay/billing/ratio"
 )
 
 func TestGptImage1HasDualPricing(t *testing.T) {
@@ -35,5 +35,21 @@ func TestNewGptImageModelsPricing(t *testing.T) {
 		require.InDelta(t, 2.0, cfg.CompletionRatio, 1e-9, "unexpected completion ratio for %s", model)
 		require.NotNil(t, cfg.Image, "expected image config for %s", model)
 		require.Greater(t, cfg.Image.PricePerImageUsd, 0.0, "expected image price for %s", model)
+	}
+}
+
+func TestGptImage2Pricing(t *testing.T) {
+	for _, model := range []string{"gpt-image-2", "gpt-image-2-2026-04-21"} {
+		cfg, ok := ModelRatios[model]
+		require.True(t, ok, "%s not found in ModelRatios", model)
+		require.InDelta(t, 5.0*ratio.MilliTokensUsd, cfg.Ratio, 1e-9, "unexpected input ratio for %s", model)
+		require.InDelta(t, 1.25*ratio.MilliTokensUsd, cfg.CachedInputRatio, 1e-9, "unexpected cached ratio for %s", model)
+		require.NotNil(t, cfg.Image, "expected image config for %s", model)
+		require.InDelta(t, 0.006, cfg.Image.PricePerImageUsd, 1e-12, "unexpected image price for %s", model)
+		require.Equal(t, "1024x1024", cfg.Image.DefaultSize, "unexpected default size for %s", model)
+		require.Equal(t, "auto", cfg.Image.DefaultQuality, "unexpected default quality for %s", model)
+		require.Equal(t, 32000, cfg.Image.PromptTokenLimit, "unexpected prompt length limit for %s", model)
+		require.Equal(t, 1, cfg.Image.MinImages, "unexpected min images for %s", model)
+		require.Equal(t, 10, cfg.Image.MaxImages, "unexpected max images for %s", model)
 	}
 }

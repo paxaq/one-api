@@ -11,9 +11,11 @@ import (
 	"github.com/Laisky/zap"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/relay/channeltype"
-	"github.com/songquanpeng/one-api/relay/model"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/relay/adaptor"
+	"github.com/Laisky/one-api/relay/adaptor/common/toolnamesafe"
+	"github.com/Laisky/one-api/relay/channeltype"
+	"github.com/Laisky/one-api/relay/model"
 )
 
 const (
@@ -22,6 +24,8 @@ const (
 	Done             = "[DONE]"
 )
 
+// shouldLogDetailedUpstreamBody determines whether to log the full upstream response body
+// for debugging purposes based on query parameter or logger level.
 func shouldLogDetailedUpstreamBody(c *gin.Context) bool {
 	if c == nil {
 		return true
@@ -116,43 +120,18 @@ func CountTokenText(text string, modelName string) int {
 
 // GetFullRequestURL constructs the full request URL for OpenAI-compatible APIs
 func GetFullRequestURL(baseURL string, requestURL string, channelType int) string {
-	trimmedBase := strings.TrimRight(baseURL, "/")
-	path := strings.TrimSpace(requestURL)
-	if path != "" && !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-
+	trimmedBase := adaptor.NormalizeBaseURL(baseURL)
+	path := adaptor.NormalizeRequestPath(requestURL)
+	exactV1Result := ""
 	if channelType == channeltype.OpenAICompatible {
-		if strings.HasSuffix(trimmedBase, "/v1") {
-			path = strings.TrimPrefix(path, "/v1")
-			if path == "" {
-				path = "/"
-			}
-			if !strings.HasPrefix(path, "/") {
-				path = "/" + path
-			}
-		}
-		if path == "" {
-			return trimmedBase
-		}
-		return trimmedBase + path
+		exactV1Result = "/"
 	}
 
-	if strings.HasSuffix(trimmedBase, "/v1") {
-		if path == "/v1" {
-			path = ""
-		} else if strings.HasPrefix(path, "/v1/") {
-			path = path[len("/v1"):]
-			if path == "" {
-				path = ""
-			}
-		}
+	if adaptor.HasVersionSuffix(trimmedBase) {
+		path = adaptor.StripOpenAIV1Prefix(path, exactV1Result)
 	}
 
-	if path == "" {
-		return trimmedBase
-	}
-	return trimmedBase + path
+	return adaptor.JoinBaseURLAndPath(trimmedBase, path)
 }
 
 // StreamHandler processes streaming responses from OpenAI-compatible APIs
@@ -329,6 +308,7 @@ func Handler(c *gin.Context, resp *http.Response, promptTokens int, modelName st
 	reasoningFormat := c.Query("reasoning_format")
 	for i := range textResponse.Choices {
 		normalizeReasoningChoice(&textResponse.Choices[i], reasoningFormat)
+		toolnamesafe.RestoreToolCallNames(c, textResponse.Choices[i].Message.ToolCalls)
 	}
 
 	// Optionally extract <think> blocks when enabled via URL param and map to requested field
@@ -382,6 +362,10 @@ func Handler(c *gin.Context, resp *http.Response, promptTokens int, modelName st
 	if usage.TotalTokens == 0 {
 		usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 	}
+	// Promote any top-level cached_tokens (e.g. StepFun) into the nested
+	// prompt_tokens_details.cached_tokens field so downstream billing applies
+	// the cache-hit ratio. No-op for OpenAI-shaped responses.
+	usage.NormalizeCachedTokens()
 	logger.Debug("finalized usage for non-stream (openai-compatible)",
 		zap.Int("prompt_tokens", usage.PromptTokens),
 		zap.Int("completion_tokens", usage.CompletionTokens),

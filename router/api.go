@@ -1,9 +1,9 @@
 package router
 
 import (
-	"github.com/songquanpeng/one-api/controller"
-	"github.com/songquanpeng/one-api/controller/auth"
-	"github.com/songquanpeng/one-api/middleware"
+	"github.com/Laisky/one-api/controller"
+	"github.com/Laisky/one-api/controller/auth"
+	"github.com/Laisky/one-api/middleware"
 
 	"github.com/gin-contrib/gzip"
 	"github.com/gin-gonic/gin"
@@ -16,7 +16,7 @@ func SetApiRouter(router *gin.Engine) {
 	{
 		apiRouter.GET("/status", controller.GetStatus)
 		apiRouter.GET("/status/channel", controller.GetChannelStatus)
-		apiRouter.GET("/models", middleware.UserAuth(), controller.DashboardListModels)
+		apiRouter.GET("/models", middleware.AdminAuth(), controller.DashboardListModels)
 		// Public endpoint: anonymous users see all supported models; logged-in users see only allowed models
 		apiRouter.GET("/models/display", middleware.OptionalUserAuth(), controller.GetModelsDisplay)
 		// Public endpoint: list enabled MCP servers and their enabled tools
@@ -107,6 +107,7 @@ func SetApiRouter(router *gin.Engine) {
 			channelRoute.GET("/pricing/:id", controller.GetChannelPricing)
 			channelRoute.GET("/default-pricing", controller.GetChannelDefaultPricing)
 			channelRoute.POST("/", controller.AddChannel)
+			channelRoute.POST("/:id/duplicate", controller.DuplicateChannel)
 			channelRoute.PUT("/", controller.UpdateChannel)
 			channelRoute.PUT("/pricing/:id", controller.UpdateChannelPricing)
 			channelRoute.DELETE("/disabled", controller.DeleteDisabledChannel)
@@ -136,6 +137,15 @@ func SetApiRouter(router *gin.Engine) {
 			apiRouter.GET("/token/balance", middleware.TokenAuth(), controller.GetTokenBalance)
 			apiRouter.GET("/token/transactions", middleware.TokenAuth(), controller.GetTokenTransactions)
 			apiRouter.GET("/token/logs", middleware.TokenAuth(), controller.GetTokenLogs)
+		}
+		// Admin-scoped read-only token visibility (cross-user). Write ops stay on /api/token
+		// under UserAuth so admins can never silently mutate another user's credentials.
+		adminTokenRoute := apiRouter.Group("/admin/tokens")
+		adminTokenRoute.Use(middleware.AdminAuth())
+		{
+			adminTokenRoute.GET("/", controller.AdminGetAllTokens)
+			adminTokenRoute.GET("/search", controller.AdminSearchTokens)
+			adminTokenRoute.GET("/:id", controller.AdminGetToken)
 		}
 		costRoute := apiRouter.Group("/cost")
 		{

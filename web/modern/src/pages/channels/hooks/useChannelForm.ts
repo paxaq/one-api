@@ -6,8 +6,16 @@ import { useForm } from 'react-hook-form';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CHANNEL_TYPES_WITH_DEDICATED_BASE_URL } from '../constants';
-import { isValidJSON, normalizeChannelType, stringifyToolingConfig, toInt, validateModelConfigs } from '../helpers';
-import { type ChannelConfigForm, type ChannelForm, type EndpointInfo, channelSchema } from '../schemas';
+import {
+  buildChannelSubmitPayload,
+  isValidJSON,
+  normalizeChannelType,
+  sanitizeJsonInput,
+  stringifyToolingConfig,
+  toInt,
+  validateModelConfigs,
+} from '../helpers';
+import { createChannelSchema, type ChannelConfigForm, type ChannelForm, type EndpointInfo } from '../schemas';
 
 export const useChannelForm = () => {
   const params = useParams();
@@ -38,9 +46,17 @@ export const useChannelForm = () => {
     fromType: number;
     toType: number;
   } | null>(null);
+  // State for save warning confirmation dialog when Model Mapping keys/targets look suspicious.
+  const [pendingSaveConfirmation, setPendingSaveConfirmation] = useState<{
+    data: ChannelForm;
+    unreachableMappingKeys: string[];
+    unknownMappingTargets: { source: string; target: string }[];
+  } | null>(null);
+
+  const schema = useMemo(() => createChannelSchema((key, defaultValue) => tr(key, defaultValue)), [tr]);
 
   const form = useForm<ChannelForm>({
-    resolver: zodResolver(channelSchema),
+    resolver: zodResolver(schema),
     defaultValues: {
       name: '',
       type: isEdit ? 1 : (undefined as unknown as number),
@@ -48,6 +64,7 @@ export const useChannelForm = () => {
       base_url: '',
       other: '',
       models: [],
+      hidden_models: [],
       model_mapping: '',
       model_configs: '',
       tooling: '',
@@ -66,7 +83,15 @@ export const useChannelForm = () => {
         auth_type: 'personal_access_token',
         api_format: 'chat_completion',
         supported_endpoints: [],
+        endpoint_urls: {},
         mcp_tool_blacklist: [],
+        custom_headers: {},
+        spark_app_id: '',
+        spark_api_secret: '',
+        spark_api_key: '',
+        tencent_app_id: '',
+        tencent_secret_id: '',
+        tencent_secret_key: '',
       },
       inference_profile_arn_map: '',
     },
@@ -109,7 +134,7 @@ export const useChannelForm = () => {
         }
       }
     } catch (error) {
-      console.error('Error loading default pricing:', error);
+      console.error(`Error loading default pricing: ${error instanceof Error ? error.message : String(error)}`);
     }
   }, []);
 
@@ -149,7 +174,15 @@ export const useChannelForm = () => {
           auth_type: 'personal_access_token',
           api_format: 'chat_completion',
           supported_endpoints: [],
+          endpoint_urls: {},
           mcp_tool_blacklist: [],
+          custom_headers: {},
+          spark_app_id: '',
+          spark_api_secret: '',
+          spark_api_key: '',
+          tencent_app_id: '',
+          tencent_secret_id: '',
+          tencent_secret_key: '',
         };
         if (data.config && typeof data.config === 'string' && data.config.trim() !== '') {
           try {
@@ -159,10 +192,27 @@ export const useChannelForm = () => {
               ...parsed,
               api_format: parsed.api_format === 'response' ? 'response' : 'chat_completion',
               supported_endpoints: Array.isArray(parsed.supported_endpoints) ? parsed.supported_endpoints : [],
+              endpoint_urls:
+                parsed.endpoint_urls && typeof parsed.endpoint_urls === 'object' && !Array.isArray(parsed.endpoint_urls)
+                  ? Object.fromEntries(
+                      Object.entries(parsed.endpoint_urls)
+                        .map(([key, value]) => [key, typeof value === 'string' ? value.trim() : String(value ?? '').trim()])
+                        .filter(([, value]) => value !== '')
+                    )
+                  : {},
               mcp_tool_blacklist: Array.isArray(parsed.mcp_tool_blacklist) ? parsed.mcp_tool_blacklist : [],
+              custom_headers:
+                parsed.custom_headers && typeof parsed.custom_headers === 'object' && !Array.isArray(parsed.custom_headers)
+                  ? Object.fromEntries(
+                      Object.entries(parsed.custom_headers).map(([key, value]) => [
+                        key,
+                        typeof value === 'string' ? value : String(value ?? ''),
+                      ])
+                    )
+                  : {},
             };
           } catch (e) {
-            console.error('Failed to parse config JSON:', e);
+            console.error(`Failed to parse config JSON: ${e instanceof Error ? e.message : String(e)}`);
           }
         }
 
@@ -177,7 +227,47 @@ export const useChannelForm = () => {
           return '';
         };
 
+        const parseStringArrayField = (field: unknown): string[] => {
+          if (Array.isArray(field)) {
+            return field
+              .filter((item): item is string => typeof item === 'string')
+              .map((item) => item.trim())
+              .filter((item) => item !== '');
+          }
+          if (typeof field !== 'string' || field.trim() === '') {
+            return [];
+          }
+          try {
+            const parsed = JSON.parse(field);
+            if (!Array.isArray(parsed)) {
+              return [];
+            }
+            return parsed
+              .filter((item): item is string => typeof item === 'string')
+              .map((item) => item.trim())
+              .filter((item) => item !== '');
+          } catch (_e) {
+            return [];
+          }
+        };
+
         const channelType = toInt(data.type, 1);
+
+        // Spark (18): key is APPID|APISecret|APIKey. Hydrate config inputs from
+        // existing key so admins can edit each part individually.
+        if (channelType === 18 && typeof data.key === 'string' && data.key.includes('|')) {
+          const [appId = '', apiSecret = '', apiKey = ''] = data.key.split('|');
+          if (!config.spark_app_id) config.spark_app_id = appId;
+          if (!config.spark_api_secret) config.spark_api_secret = apiSecret;
+          if (!config.spark_api_key) config.spark_api_key = apiKey;
+        }
+        // Tencent (23): key is AppId|SecretId|SecretKey.
+        if (channelType === 23 && typeof data.key === 'string' && data.key.includes('|')) {
+          const [appId = '', secretId = '', secretKey = ''] = data.key.split('|');
+          if (!config.tencent_app_id) config.tencent_app_id = appId;
+          if (!config.tencent_secret_id) config.tencent_secret_id = secretId;
+          if (!config.tencent_secret_key) config.tencent_secret_key = secretKey;
+        }
         let toolingField = '';
         if (data.tooling && typeof data.tooling === 'string' && data.tooling.trim() !== '') {
           try {
@@ -195,6 +285,7 @@ export const useChannelForm = () => {
           base_url: data.base_url || '',
           other: data.other || '',
           models,
+          hidden_models: parseStringArrayField(data.hidden_models),
           model_mapping: formatJsonField(data.model_mapping),
           model_configs: formatJsonField(data.model_configs),
           tooling: toolingField,
@@ -207,14 +298,12 @@ export const useChannelForm = () => {
           inference_profile_arn_map: formatJsonField(data.inference_profile_arn_map),
         };
 
-        console.debug('[EditChannel] Loaded channel payload', {
-          channelId: data.id ?? channelId,
-          channelType,
-          hasModelMapping: Boolean(data.model_mapping),
-          modelMappingLength: typeof data.model_mapping === 'string' ? data.model_mapping.length : 0,
-          hasModelConfigs: Boolean(data.model_configs),
-          hasSystemPrompt: Boolean(data.system_prompt),
-        });
+        console.debug(
+          `[EditChannel] Loaded channel payload channelId=${data.id ?? channelId} channelType=${channelType} ` +
+            `hasModelMapping=${Boolean(data.model_mapping)} ` +
+            `modelMappingLength=${typeof data.model_mapping === 'string' ? data.model_mapping.length : 0} ` +
+            `hasModelConfigs=${Boolean(data.model_configs)} hasSystemPrompt=${Boolean(data.system_prompt)}`
+        );
 
         if (channelType) {
           await loadDefaultPricing(channelType);
@@ -238,7 +327,7 @@ export const useChannelForm = () => {
         throw new Error(message || 'Failed to load channel');
       }
     } catch (error) {
-      console.error('Error loading channel:', error);
+      console.error(`Error loading channel: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       setLoading(false);
     }
@@ -261,7 +350,7 @@ export const useChannelForm = () => {
         setModelsCatalog(catalog);
       }
     } catch (error) {
-      console.error('Error loading models catalog:', error);
+      console.error(`Error loading models catalog: ${error instanceof Error ? error.message : String(error)}`);
     }
   }, []);
 
@@ -283,7 +372,7 @@ export const useChannelForm = () => {
         }
       }
     } catch (error) {
-      console.error('Error loading groups:', error);
+      console.error(`Error loading groups: ${error instanceof Error ? error.message : String(error)}`);
       setGroups(['default']);
     }
   }, []);
@@ -340,30 +429,79 @@ export const useChannelForm = () => {
     }
   }, [normalizedChannelType, loadDefaultPricing]);
 
+  /**
+   * getMappingWarnings inspects Model Mapping entries against the channel's configuration to
+   * surface silent misconfigurations before saving:
+   * - Source (key) not in Supported Models → requests to the alias cannot reach this channel.
+   * - Target (value) not in either the channel's supported list or the channel-type catalog →
+   *   likely a typo that will cause the upstream to reject requests.
+   */
+  const getMappingWarnings = (data: ChannelForm): { unreachableKeys: string[]; unknownTargets: { source: string; target: string }[] } => {
+    const empty = { unreachableKeys: [] as string[], unknownTargets: [] as { source: string; target: string }[] };
+    const mappingRaw = (data.model_mapping || '').trim();
+    if (!mappingRaw) {
+      return empty;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(sanitizeJsonInput(mappingRaw));
+    } catch {
+      return empty;
+    }
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+      return empty;
+    }
+    const supported = new Set((data.models || []).map((model) => model.trim()).filter((model) => model.length > 0));
+    const channelType = normalizeChannelType(data.type);
+    const catalog = channelType !== null ? (modelsCatalog[channelType] ?? []) : [];
+    const catalogSet = new Set(catalog.map((model) => model.trim()).filter((model) => model.length > 0));
+    const knownTargets = new Set<string>();
+    supported.forEach((entry) => knownTargets.add(entry));
+    catalogSet.forEach((entry) => knownTargets.add(entry));
+
+    const unreachableKeys: string[] = [];
+    const unknownTargets: { source: string; target: string }[] = [];
+    for (const [rawKey, rawValue] of Object.entries(parsed as Record<string, unknown>)) {
+      const key = rawKey.trim();
+      if (key.length === 0) continue;
+      if (!supported.has(key)) {
+        unreachableKeys.push(key);
+      }
+      if (catalogSet.size === 0) continue; // Cannot judge target validity without a catalog.
+      if (typeof rawValue !== 'string') continue;
+      const target = rawValue.trim();
+      if (target.length === 0) continue;
+      if (!knownTargets.has(target)) {
+        unknownTargets.push({ source: key, target });
+      }
+    }
+    return { unreachableKeys, unknownTargets };
+  };
+
   const onSubmit = async (data: ChannelForm) => {
+    // Intercept before hitting the network so admins can review Model Mapping entries that
+    // look wrong (sources unreachable or targets not recognized by this channel).
+    const { unreachableKeys, unknownTargets } = getMappingWarnings(data);
+    if (unreachableKeys.length > 0 || unknownTargets.length > 0) {
+      setPendingSaveConfirmation({
+        data,
+        unreachableMappingKeys: unreachableKeys,
+        unknownMappingTargets: unknownTargets,
+      });
+      return;
+    }
+    await performSubmit(data);
+  };
+
+  const performSubmit = async (data: ChannelForm) => {
     setIsSubmitting(true);
     try {
-      const payload: any = { ...data };
-
-      if (watchType === 33 && watchConfig.ak && watchConfig.sk && watchConfig.region) {
-        payload.key = `${watchConfig.ak}|${watchConfig.sk}|${watchConfig.region}`;
-      } else if (watchType === 42 && watchConfig.region && watchConfig.vertex_ai_project_id && watchConfig.vertex_ai_adc) {
-        payload.key = `${watchConfig.region}|${watchConfig.vertex_ai_project_id}|${watchConfig.vertex_ai_adc}`;
-      }
-
-      if (!isEdit && (!payload.key || payload.key.trim() === '')) {
-        form.setError('key', { message: 'API key is required' });
-        notify({
-          type: 'error',
-          title: tr('validation.error_title', 'Validation error'),
-          message: tr('validation.api_key_required', 'API key is required.'),
-        });
-        return;
-      }
+      // API Key is optional for every channel type: an empty key is accepted on
+      // both create and edit, so no presence validation is enforced here.
 
       if (data.model_mapping && !isValidJSON(data.model_mapping)) {
         form.setError('model_mapping', {
-          message: 'Invalid JSON format in model mapping',
+          message: tr('validation.model_mapping_invalid', 'Model Mapping has invalid JSON.'),
         });
         notify({
           type: 'error',
@@ -377,7 +515,7 @@ export const useChannelForm = () => {
         const validation = validateModelConfigs(data.model_configs);
         if (!validation.valid) {
           form.setError('model_configs', {
-            message: validation.error || 'Invalid model configs format',
+            message: validation.error || tr('model_configs.invalid', 'Invalid model configs format'),
           });
           notify({
             type: 'error',
@@ -390,7 +528,7 @@ export const useChannelForm = () => {
 
       if (data.inference_profile_arn_map && !isValidJSON(data.inference_profile_arn_map)) {
         form.setError('inference_profile_arn_map', {
-          message: 'Invalid JSON format in inference profile ARN map',
+          message: tr('validation.inference_profile_invalid', 'Inference Profile ARN Map has invalid JSON.'),
         });
         notify({
           type: 'error',
@@ -400,10 +538,12 @@ export const useChannelForm = () => {
         return;
       }
 
-      if (watchType === 34 && watchConfig.auth_type === 'oauth_jwt') {
+      // Only validate the Coze OAuth JWT payload when a key was actually
+      // provided; an empty key is permitted like every other channel type.
+      if (watchType === 34 && watchConfig.auth_type === 'oauth_jwt' && data.key && data.key.trim() !== '') {
         if (!isValidJSON(data.key)) {
           form.setError('key', {
-            message: 'Invalid JSON format for OAuth JWT configuration',
+            message: tr('validation.oauth_invalid_json', 'OAuth JWT configuration JSON is invalid.'),
           });
           notify({
             type: 'error',
@@ -414,13 +554,13 @@ export const useChannelForm = () => {
         }
 
         try {
-          const oauthConfig = JSON.parse(data.key);
+          const oauthConfig = JSON.parse(sanitizeJsonInput(data.key));
           const requiredFields = ['client_type', 'client_id', 'coze_www_base', 'coze_api_base', 'private_key', 'public_key_id'];
 
           for (const field of requiredFields) {
             if (!Object.hasOwn(oauthConfig, field)) {
               form.setError('key', {
-                message: `Missing required field: ${field}`,
+                message: tr('validation.oauth_missing_field_message', 'OAuth JWT configuration missing: {{field}}', { field }),
               });
               notify({
                 type: 'error',
@@ -435,7 +575,7 @@ export const useChannelForm = () => {
 
             if (effectiveEndpoints.length === 0) {
               form.setError('config.supported_endpoints', {
-                message: 'Select at least one endpoint',
+                message: tr('validation.endpoints_required', 'Enable at least one endpoint before saving.'),
               });
               notify({
                 type: 'error',
@@ -447,7 +587,7 @@ export const useChannelForm = () => {
           }
         } catch (error) {
           form.setError('key', {
-            message: `OAuth config parse error: ${(error as Error).message}`,
+            message: tr('validation.oauth_parse_message', 'OAuth JWT parse error: {{error}}', { error: (error as Error).message }),
           });
           notify({
             type: 'error',
@@ -458,28 +598,14 @@ export const useChannelForm = () => {
         }
       }
 
-      payload.priority = toInt(payload.priority, 0);
-      payload.weight = toInt(payload.weight, 0);
-      payload.ratelimit = toInt(payload.ratelimit, 0);
-
-      payload.models = payload.models.join(',');
-      payload.group = payload.groups.join(',');
-      delete payload.groups;
-
-      payload.config = JSON.stringify(data.config);
-
-      if (isEdit && (!payload.key || payload.key.trim() === '')) {
-        delete payload.key;
-      }
-
-      const normalizedSubmitType = normalizeChannelType(payload.type);
-      const baseURLRawValue = typeof payload.base_url === 'string' ? payload.base_url : '';
+      const normalizedSubmitType = normalizeChannelType(data.type);
+      const baseURLRawValue = typeof data.base_url === 'string' ? data.base_url : '';
       const trimmedBaseURL = baseURLRawValue.trim();
       const baseURLRequired = normalizedSubmitType !== null && CHANNEL_TYPES_WITH_DEDICATED_BASE_URL.has(normalizedSubmitType);
 
       if (baseURLRequired && !trimmedBaseURL) {
         form.setError('base_url', {
-          message: 'Base URL is required for this channel type',
+          message: tr('validation.base_url_required', 'Base URL is required for this channel type.'),
         });
         notify({
           type: 'error',
@@ -488,31 +614,19 @@ export const useChannelForm = () => {
         });
         return;
       }
-
-      payload.base_url = trimmedBaseURL;
       form.clearErrors('base_url');
 
-      if (payload.base_url?.endsWith('/')) {
-        payload.base_url = payload.base_url.slice(0, -1);
-      }
-
-      if (watchType === 3 && (!payload.other || payload.other.trim() === '')) {
-        payload.other = '2024-03-01-preview';
-      }
-
-      const jsonFields = ['model_mapping', 'model_configs', 'inference_profile_arn_map', 'system_prompt'];
-      jsonFields.forEach((field) => {
-        const v = payload[field];
-        if (typeof v === 'string' && v.trim() === '') {
-          payload[field] = null;
-        }
+      const payload = buildChannelSubmitPayload(data, {
+        isEdit,
+        watchType: watchType ?? null,
+        watchConfig,
       });
 
       let response;
       if (isEdit && channelId) {
         response = await api.put('/api/channel/', {
           ...payload,
-          id: parseInt(channelId, 10),
+          uuid: channelId,
         });
       } else {
         response = await api.post('/api/channel/', payload);
@@ -526,7 +640,7 @@ export const useChannelForm = () => {
           },
         });
       } else {
-        form.setError('root', { message: message || 'Operation failed' });
+        form.setError('root', { message: message || tr('errors.operation_failed', 'Operation failed') });
         notify({
           type: 'error',
           title: tr('errors.request_failed_title', 'Request failed'),
@@ -535,7 +649,7 @@ export const useChannelForm = () => {
       }
     } catch (error) {
       form.setError('root', {
-        message: error instanceof Error ? error.message : 'Operation failed',
+        message: error instanceof Error ? error.message : tr('errors.operation_failed', 'Operation failed'),
       });
       notify({
         type: 'error',
@@ -593,6 +707,24 @@ export const useChannelForm = () => {
    */
   const cancelTypeChange = useCallback(() => {
     setPendingTypeChange(null);
+  }, []);
+
+  /**
+   * Confirms the pending save (dismissing the Model Mapping warning) and submits.
+   */
+  const confirmSave = useCallback(async () => {
+    const pending = pendingSaveConfirmation;
+    if (!pending) return;
+    setPendingSaveConfirmation(null);
+    await performSubmit(pending.data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSaveConfirmation]);
+
+  /**
+   * Dismisses the pending save confirmation without submitting.
+   */
+  const cancelSave = useCallback(() => {
+    setPendingSaveConfirmation(null);
   }, []);
 
   const testChannel = async () => {
@@ -658,5 +790,9 @@ export const useChannelForm = () => {
     requestTypeChange,
     confirmTypeChange,
     cancelTypeChange,
+    // Save warning handling (Model Mapping keys missing from Supported Models)
+    pendingSaveConfirmation,
+    confirmSave,
+    cancelSave,
   };
 };

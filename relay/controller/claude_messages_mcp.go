@@ -10,13 +10,13 @@ import (
 	"github.com/Laisky/errors/v2"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/model"
-	"github.com/songquanpeng/one-api/relay/adaptor"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai_compatible"
-	metalib "github.com/songquanpeng/one-api/relay/meta"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/model"
+	"github.com/Laisky/one-api/relay/adaptor"
+	"github.com/Laisky/one-api/relay/adaptor/openai"
+	"github.com/Laisky/one-api/relay/adaptor/openai_compatible"
+	metalib "github.com/Laisky/one-api/relay/meta"
+	relaymodel "github.com/Laisky/one-api/relay/model"
 )
 
 // buildClaudeToolsForMCP converts Claude tool definitions into OpenAI-style tools for MCP matching.
@@ -64,12 +64,12 @@ func detectClaudeMCPTools(c *gin.Context, meta *metalib.Meta, request *ClaudeMes
 	probe := &relaymodel.GeneralOpenAIRequest{Model: request.Model, Tools: buildClaudeToolsForMCP(request)}
 	registry, mcpToolNames, regErr := expandMCPBuiltinsInChatRequest(c, meta, channelRecord, adaptorInstance, probe)
 	if regErr != nil || registry == nil {
-		return nil, nil, nil, regErr
+		return nil, nil, nil, errors.Wrap(regErr, "expand MCP builtins in probe request")
 	}
 
 	convertedAny, err := openai_compatible.ConvertClaudeRequest(c, request)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, errors.Wrap(err, "convert Claude request to OpenAI format")
 	}
 	converted, ok := convertedAny.(*relaymodel.GeneralOpenAIRequest)
 	if !ok {
@@ -77,7 +77,7 @@ func detectClaudeMCPTools(c *gin.Context, meta *metalib.Meta, request *ClaudeMes
 	}
 	registry, mcpToolNames, regErr = expandMCPBuiltinsInChatRequest(c, meta, channelRecord, adaptorInstance, converted)
 	if regErr != nil || registry == nil {
-		return nil, nil, nil, regErr
+		return nil, nil, nil, errors.Wrap(regErr, "expand MCP builtins in converted request")
 	}
 	return registry, mcpToolNames, converted, nil
 }

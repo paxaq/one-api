@@ -5,22 +5,21 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/Laisky/errors/v2"
-	gmw "github.com/Laisky/gin-middlewares/v7"
 	"github.com/Laisky/zap"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/common/logger"
-	"github.com/songquanpeng/one-api/model"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/common/helper"
+	"github.com/Laisky/one-api/common/logger"
+	"github.com/Laisky/one-api/model"
 )
 
 var (
@@ -93,7 +92,7 @@ func parseRPOrigins() []string {
 func PasskeyRegisterBegin(c *gin.Context) {
 	w, err := getWebAuthn()
 	if err != nil {
-		respondError(c, "WebAuthn not available", err)
+		helper.RespondError(c, errors.Wrap(err, "WebAuthn not available"))
 		return
 	}
 
@@ -108,14 +107,19 @@ func PasskeyRegisterBegin(c *gin.Context) {
 		var err error
 		user, err = model.GetUserById(userId, false)
 		if err != nil {
-			respondError(c, "failed to get user", err)
+			helper.RespondError(c, errors.Wrap(errors.Wrapf(err, "get user %d", userId), "failed to get user"))
 			return
 		}
 	}
 
+	if user.Metadata.PasswordLocked {
+		helper.RespondError(c, errors.New("MFA enrollment is locked by administrator"))
+		return
+	}
+
 	wUser, err := model.NewWebAuthnUser(user)
 	if err != nil {
-		respondError(c, "failed to create webauthn user", err)
+		helper.RespondError(c, errors.Wrap(err, "failed to create webauthn user"))
 		return
 	}
 
@@ -134,7 +138,7 @@ func PasskeyRegisterBegin(c *gin.Context) {
 		webauthn.WithResidentKeyRequirement(protocol.ResidentKeyRequirementRequired),
 	)
 	if err != nil {
-		respondError(c, "failed to begin registration", err)
+		helper.RespondError(c, errors.Wrap(err, "failed to begin registration"))
 		return
 	}
 
@@ -143,7 +147,7 @@ func PasskeyRegisterBegin(c *gin.Context) {
 	session := sessions.Default(c)
 	session.Set("webauthn_register_session", string(sessBytes))
 	if err = session.Save(); err != nil {
-		respondError(c, "failed to save session", err)
+		helper.RespondError(c, errors.Wrap(err, "failed to save session"))
 		return
 	}
 
@@ -157,7 +161,7 @@ func PasskeyRegisterBegin(c *gin.Context) {
 func PasskeyRegisterFinish(c *gin.Context) {
 	w, err := getWebAuthn()
 	if err != nil {
-		respondError(c, "WebAuthn not available", err)
+		helper.RespondError(c, errors.Wrap(err, "WebAuthn not available"))
 		return
 	}
 
@@ -172,14 +176,19 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		var err error
 		user, err = model.GetUserById(userId, false)
 		if err != nil {
-			respondError(c, "failed to get user", err)
+			helper.RespondError(c, errors.Wrap(errors.Wrapf(err, "get user %d", userId), "failed to get user"))
 			return
 		}
 	}
 
+	if user.Metadata.PasswordLocked {
+		helper.RespondError(c, errors.New("MFA enrollment is locked by administrator"))
+		return
+	}
+
 	wUser, err := model.NewWebAuthnUser(user)
 	if err != nil {
-		respondError(c, "failed to create webauthn user", err)
+		helper.RespondError(c, errors.Wrap(err, "failed to create webauthn user"))
 		return
 	}
 
@@ -187,19 +196,19 @@ func PasskeyRegisterFinish(c *gin.Context) {
 	session := sessions.Default(c)
 	sessStr, ok := session.Get("webauthn_register_session").(string)
 	if !ok || sessStr == "" {
-		respondError(c, "no registration session found, please start again")
+		helper.RespondError(c, errors.New("no registration session found, please start again"))
 		return
 	}
 
 	var sessionData webauthn.SessionData
 	if err = json.Unmarshal([]byte(sessStr), &sessionData); err != nil {
-		respondError(c, "invalid session data", err)
+		helper.RespondError(c, errors.Wrap(err, "invalid session data"))
 		return
 	}
 
 	credential, err := w.FinishRegistration(wUser, sessionData, c.Request)
 	if err != nil {
-		respondError(c, "registration failed", err)
+		helper.RespondError(c, errors.Wrap(err, "registration failed"))
 		return
 	}
 
@@ -226,7 +235,7 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		Transport:       model.TransportsToString(credential.Transport),
 	}
 	if err = model.CreatePasskeyCredential(dbCred); err != nil {
-		respondError(c, "failed to save credential", err)
+		helper.RespondError(c, errors.Wrap(err, "failed to save credential"))
 		return
 	}
 
@@ -238,8 +247,9 @@ func PasskeyRegisterFinish(c *gin.Context) {
 		"success": true,
 		"message": "Passkey registered successfully",
 		"data": gin.H{
-			"id":   dbCred.Id,
-			"name": dbCred.CredentialName,
+			"uuid":      dbCred.UUID,
+			"user_uuid": dbCred.UserUUID,
+			"name":      dbCred.CredentialName,
 		},
 	})
 }
@@ -253,13 +263,13 @@ func PasskeyRegisterFinish(c *gin.Context) {
 func PasskeyLoginBegin(c *gin.Context) {
 	w, err := getWebAuthn()
 	if err != nil {
-		respondError(c, "WebAuthn not available", err)
+		helper.RespondError(c, errors.Wrap(err, "WebAuthn not available"))
 		return
 	}
 
 	assertion, sessionData, err := w.BeginDiscoverableLogin()
 	if err != nil {
-		respondError(c, "failed to begin login", err)
+		helper.RespondError(c, errors.Wrap(err, "failed to begin login"))
 		return
 	}
 
@@ -267,7 +277,7 @@ func PasskeyLoginBegin(c *gin.Context) {
 	session := sessions.Default(c)
 	session.Set("webauthn_login_session", string(sessBytes))
 	if err = session.Save(); err != nil {
-		respondError(c, "failed to save session", err)
+		helper.RespondError(c, errors.Wrap(err, "failed to save session"))
 		return
 	}
 
@@ -281,20 +291,20 @@ func PasskeyLoginBegin(c *gin.Context) {
 func PasskeyLoginFinish(c *gin.Context) {
 	w, err := getWebAuthn()
 	if err != nil {
-		respondError(c, "WebAuthn not available", err)
+		helper.RespondError(c, errors.Wrap(err, "WebAuthn not available"))
 		return
 	}
 
 	session := sessions.Default(c)
 	sessStr, ok := session.Get("webauthn_login_session").(string)
 	if !ok || sessStr == "" {
-		respondError(c, "no login session found, please start again")
+		helper.RespondError(c, errors.New("no login session found, please start again"))
 		return
 	}
 
 	var sessionData webauthn.SessionData
 	if err = json.Unmarshal([]byte(sessStr), &sessionData); err != nil {
-		respondError(c, "invalid session data", err)
+		helper.RespondError(c, errors.Wrap(err, "invalid session data"))
 		return
 	}
 
@@ -317,14 +327,14 @@ func PasskeyLoginFinish(c *gin.Context) {
 		resolvedUser = user
 		wUser, err := model.NewWebAuthnUser(user)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "build webauthn user")
 		}
 		return wUser, nil
 	}
 
 	credential, err := w.FinishDiscoverableLogin(handler, sessionData, c.Request)
 	if err != nil {
-		respondError(c, "login failed", err)
+		helper.RespondError(c, errors.Wrap(err, "login failed"))
 		return
 	}
 
@@ -335,7 +345,7 @@ func PasskeyLoginFinish(c *gin.Context) {
 	}
 
 	if resolvedUser == nil {
-		respondError(c, "failed to resolve user from credential")
+		helper.RespondError(c, errors.New("failed to resolve user from credential"))
 		return
 	}
 
@@ -356,21 +366,23 @@ func PasskeyList(c *gin.Context) {
 	userId := c.GetInt(ctxkey.Id)
 	creds, err := model.GetPasskeyCredentialsByUserId(userId)
 	if err != nil {
-		respondError(c, "failed to list passkeys", err)
+		helper.RespondError(c, errors.Wrap(err, "failed to list passkeys"))
 		return
 	}
 
 	type passkeyInfo struct {
-		Id             int    `json:"id"`
-		CredentialName string `json:"credential_name"`
-		SignCount      uint32 `json:"sign_count"`
-		CreatedAt      int64  `json:"created_at"`
+		UUID           string  `json:"uuid"`
+		UserUUID       *string `json:"user_uuid"`
+		CredentialName string  `json:"credential_name"`
+		SignCount      uint32  `json:"sign_count"`
+		CreatedAt      int64   `json:"created_at"`
 	}
 
 	list := make([]passkeyInfo, 0, len(creds))
 	for _, cr := range creds {
 		list = append(list, passkeyInfo{
-			Id:             cr.Id,
+			UUID:           cr.UUID,
+			UserUUID:       cr.UserUUID,
 			CredentialName: cr.CredentialName,
 			SignCount:      cr.SignCount,
 			CreatedAt:      cr.CreatedAt,
@@ -387,14 +399,14 @@ func PasskeyList(c *gin.Context) {
 func PasskeyDelete(c *gin.Context) {
 	userId := c.GetInt(ctxkey.Id)
 	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
+	id, err := resolvePasskeyCredentialRef(idStr)
 	if err != nil {
-		respondError(c, "invalid credential id")
+		helper.RespondError(c, errors.New("invalid credential id"))
 		return
 	}
 
 	if err = model.DeletePasskeyCredential(id, userId); err != nil {
-		respondError(c, "failed to delete passkey", err)
+		helper.RespondError(c, errors.Wrap(err, "failed to delete passkey"))
 		return
 	}
 
@@ -408,9 +420,9 @@ func PasskeyDelete(c *gin.Context) {
 func PasskeyRename(c *gin.Context) {
 	userId := c.GetInt(ctxkey.Id)
 	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
+	id, err := resolvePasskeyCredentialRef(idStr)
 	if err != nil {
-		respondError(c, "invalid credential id")
+		helper.RespondError(c, errors.New("invalid credential id"))
 		return
 	}
 
@@ -418,46 +430,31 @@ func PasskeyRename(c *gin.Context) {
 		Name string `json:"name"`
 	}
 	if err = json.NewDecoder(c.Request.Body).Decode(&req); err != nil {
-		respondError(c, invalidParameterMessage)
+		helper.RespondError(c, errors.New(invalidParameterMessage))
 		return
 	}
 
 	name := strings.TrimSpace(req.Name)
 	if name == "" || len(name) > 128 {
-		respondError(c, "name must be 1-128 characters")
+		helper.RespondError(c, errors.New("name must be 1-128 characters"))
 		return
 	}
 
 	// Verify ownership.
 	cred, err := model.GetPasskeyCredentialByID(id)
 	if err != nil || cred.UserId != userId {
-		respondError(c, "passkey not found", err)
+		helper.RespondError(c, errors.Wrap(err, "passkey not found"))
 		return
 	}
 
 	cred.CredentialName = name
 	if err = model.DB.Save(cred).Error; err != nil {
-		respondError(c, "failed to rename passkey", err)
+		helper.RespondError(c, errors.Wrap(err, "failed to rename passkey"))
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Passkey renamed successfully",
-	})
-}
-
-// respondError logs the error with context and returns a JSON failure response.
-func respondError(c *gin.Context, msg string, errs ...error) {
-	lg := gmw.GetLogger(c)
-	fields := []zap.Field{zap.String("msg", msg)}
-	if len(errs) > 0 && errs[0] != nil {
-		fields = append(fields, zap.Error(errs[0]))
-	}
-	lg.Warn("passkey request failed", fields...)
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": false,
-		"message": msg,
 	})
 }

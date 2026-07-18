@@ -480,6 +480,19 @@ type ModelConfig struct {
     Video             *VideoPricingConfig  `json:"video,omitempty"`
     Audio             *AudioPricingConfig  `json:"audio,omitempty"`
     Image             *ImagePricingConfig  `json:"image,omitempty"`
+    Embedding         *EmbeddingPricingConfig `json:"embedding,omitempty"`
+    ContextLength     int32                `json:"context_length,omitempty"`
+    MaxOutputTokens   int32                `json:"max_output_tokens,omitempty"`
+    InputModalities   []string             `json:"input_modalities,omitempty"`
+    OutputModalities  []string             `json:"output_modalities,omitempty"`
+    SupportedFeatures []string             `json:"supported_features,omitempty"`
+    SupportedSamplingParameters []string   `json:"supported_sampling_parameters,omitempty"`
+    SupportedReasoningEfforts []string     `json:"supported_reasoning_efforts,omitempty"`
+    DefaultReasoningEffort    string       `json:"default_reasoning_effort,omitempty"`
+    MaxReasoningTokens        int32        `json:"max_reasoning_tokens,omitempty"`
+    Quantization     string                `json:"quantization,omitempty"`
+    HuggingFaceID    string                `json:"hugging_face_id,omitempty"`
+    Description      string                `json:"description,omitempty"`
 }
 
 type ModelRatioTier struct {
@@ -494,14 +507,18 @@ type ModelRatioTier struct {
 
 - **Tiered pricing**: Adapters can attach sorted `tiers` to alter input, completion, and cache-write prices once a request crosses a token threshold. `pricing.ResolveEffectivePricing()` applies these tiers at runtime and records which threshold was selected for observability.
 - **Cache-aware pricing**: `CachedInputRatio`, `CacheWrite5mRatio`, and `CacheWrite1hRatio` let adapters express Anthropic-style prompt caching economics. Negative values mark a bucket as free; zero means “inherit the base ratio.”
+- **Time-of-day pricing**: `time_windows` attach ordered wall-clock overlays to a model config. The resolver selects the first window matching `meta.StartTime`, deep-merges its sparse pricing overlay, clears `TimeWindows`, and then applies tiers. Windows use explicit IANA timezones, support daylight-saving changes through local wall-clock conversion, midnight-crossing ranges, optional weekday filters, and optional local-date bounds.
 - **Max token policy**: `MaxTokens` carries per-model token ceilings so controllers can clamp `max_tokens` before dispatching upstream.
 - **Multimedia metadata**: `Video`, `Audio`, and `Image` pointers hold secondary pricing dimensions (per-second, per-minute, or per-image tables) alongside text token billing. These blobs travel through the three-layer resolver so channel overrides, adapter defaults, and global fallbacks stay consistent across media types.
+- **Capability metadata**: `ContextLength`, `MaxOutputTokens`, `InputModalities`, `OutputModalities`, `SupportedFeatures`, `SupportedSamplingParameters`, `Quantization`, and `HuggingFaceID` describe the model surface so adaptors, request transformers, and the admin UI can advertise what each model actually accepts.
+- **Reasoning metadata**: `SupportedReasoningEfforts` enumerates the discrete `reasoning_effort` levels a model accepts (subset of `minimal`/`low`/`medium`/`high`). `DefaultReasoningEffort` is the level applied when callers omit one. `MaxReasoningTokens` caps providers that use a budget instead of a level (Anthropic `thinking.budget_tokens`, Gemini `thinkingBudget`). Reasoning-aware request transformers read these fields data-first, falling back to model-name heuristics only when the config is empty.
 
 `VideoPricingConfig`, `AudioPricingConfig`, and `ImagePricingConfig` define the knobs administrators see in the UI: duration-based USD prices, prompt-to-token conversion ratios, render-based size/quality multipliers, and min/max batch sizes. Channel overrides merge on top of adapter defaults, and unresolved fields inherit from the previous layer to avoid surprises.
 
 #### Tier Resolution Engine
 
 - `pricing.ResolveEffectivePricing(modelName, inputTokens, adaptor)` collapses the base config plus tier overrides into an `EffectivePricing` struct before quotas are debited.
+- `pricing.ApplyTimeWindow(config, at)` applies request-start pricing windows before tier resolution. Billing paths pass the request start time; read-only model display previews pass display time.
 - Tier thresholds are inclusive (>=) and the resolver tracks the winning threshold for observability and debugging.
 - Optional tier fields inherit from the previous layer unless explicitly overridden, so you only configure what changes at that scale break.
 - If no adapter pricing exists, the resolver falls back to adapter-provided defaults (`GetModelRatio()` / `GetCompletionRatio()`) and, failing that, the final USD-per-million default.
@@ -687,7 +704,7 @@ Base formula (no caching):
 quota = (prompt_tokens + completion_tokens * completion_ratio) * model_ratio * group_ratio
 ```
 
-Claude prompt caching extends billing with cache-read and cache-write costs. We split prompt tokens into: normal input, cached-read input, and cache-write input (5m and 1h). Completion tokens may also be cached by some providers.
+Claude prompt caching extends billing with cache-read and cache-write costs. We split prompt tokens into: normal input, cached-read input, and cache-write input (5m and 1h). Completion tokens are always billed at the output price.
 
 ```
 normal_input = prompt_tokens - cached_read - cache_write_5m - cache_write_1h
@@ -695,8 +712,7 @@ normal_input = prompt_tokens - cached_read - cache_write_5m - cache_write_1h
 quota =
     normal_input        * input_price
 + cached_read         * cached_input_price
-+ noncached_completion* output_price
-    # Note: we do not bill cached completion tokens. Providers do not return cached completion metrics and there is no CachedOutputRatio.
++ completion_tokens   * output_price
 + cache_write_5m      * write5m_price
 + cache_write_1h      * write1h_price
 
@@ -704,7 +720,6 @@ where:
     input_price           = model_ratio * group_ratio
     output_price          = model_ratio * completion_ratio * group_ratio
     cached_input_price    = (CachedInputRatio if >0 else input_price) or 0 if <0
-    # No cached output price; completions are always billed at output_price
     write5m_price         = (CacheWrite5mRatio if >0 else input_price) or 0 if <0
     write1h_price         = (CacheWrite1hRatio if >0 else input_price) or 0 if <0
 ```
@@ -970,7 +985,7 @@ GET /api/channel/default-pricing?type=:channelType
 
 **Frontend:**
 
-- The logs table displays these cached token fields as tooltips in the Prompt/Completion columns for each log entry.
+- The logs table displays `cached_prompt_tokens` as a tooltip in the Prompt column for each log entry.
 
 ## Testing & Race Condition Policy (2025-08)
 

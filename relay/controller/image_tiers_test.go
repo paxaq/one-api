@@ -2,16 +2,17 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/songquanpeng/one-api/relay/adaptor/ali"
-	"github.com/songquanpeng/one-api/relay/adaptor/gemini"
-	"github.com/songquanpeng/one-api/relay/adaptor/openai"
-	"github.com/songquanpeng/one-api/relay/adaptor/vertexai"
-	"github.com/songquanpeng/one-api/relay/adaptor/xai"
-	relaymodel "github.com/songquanpeng/one-api/relay/model"
-	"github.com/songquanpeng/one-api/relay/pricing"
+	"github.com/Laisky/one-api/relay/adaptor/ali"
+	"github.com/Laisky/one-api/relay/adaptor/gemini"
+	"github.com/Laisky/one-api/relay/adaptor/openai"
+	"github.com/Laisky/one-api/relay/adaptor/vertexai"
+	"github.com/Laisky/one-api/relay/adaptor/xai"
+	relaymodel "github.com/Laisky/one-api/relay/model"
+	"github.com/Laisky/one-api/relay/pricing"
 )
 
 // Sanity check: usd_per_image * QuotaPerUsd with $0.04 -> 0.04 * 500000 = 20000
@@ -61,10 +62,14 @@ func TestImageTierTablesParity(t *testing.T) {
 		{"gpt-image-1.5", "1024x1024", "high", 133.0 / 9.0},
 		{"gpt-image-1.5-2025-12-16", "1024x1536", "high", 200.0 / 9.0},
 		{"gpt-image-1.5-2025-12-16", "1024x1024", "medium", 34.0 / 9.0},
+		{"gpt-image-2", "1024x1024", "low", 1},
+		{"gpt-image-2", "1024x1024", "auto", 211.0 / 6.0},
+		{"gpt-image-2", "1024x1536", "medium", 41.0 / 6.0},
+		{"gpt-image-2-2026-04-21", "1536x1024", "high", 165.0 / 6.0},
 	}
 
 	for _, tc := range cases {
-		cfg, ok := pricing.ResolveModelConfig(tc.model, nil, &openai.Adaptor{})
+		cfg, ok := pricing.ResolveModelConfig(tc.model, nil, &openai.Adaptor{}, time.Now())
 		require.True(t, ok && cfg.Image != nil, "missing image pricing config for %s", tc.model)
 		got, err := getImageCostRatio(&relaymodel.ImageRequest{Model: tc.model, Size: tc.size, Quality: tc.quality}, cfg.Image)
 		require.NoError(t, err)
@@ -74,7 +79,7 @@ func TestImageTierTablesParity(t *testing.T) {
 
 func TestAliImagePricingConfig(t *testing.T) {
 	t.Parallel()
-	cfg, ok := pricing.ResolveModelConfig("ali-stable-diffusion-xl", nil, &ali.Adaptor{})
+	cfg, ok := pricing.ResolveModelConfig("ali-stable-diffusion-xl", nil, &ali.Adaptor{}, time.Now())
 	require.True(t, ok && cfg.Image != nil, "expected ali-stable-diffusion-xl image pricing metadata")
 	require.Equal(t, 1, cfg.Image.MinImages, "unexpected MinImages")
 	require.Equal(t, 4, cfg.Image.MaxImages, "unexpected MaxImages")
@@ -83,7 +88,7 @@ func TestAliImagePricingConfig(t *testing.T) {
 
 func TestXAIImagePricingConfig(t *testing.T) {
 	t.Parallel()
-	cfg, ok := pricing.ResolveModelConfig("grok-2-image", nil, &xai.Adaptor{})
+	cfg, ok := pricing.ResolveModelConfig("grok-2-image", nil, &xai.Adaptor{}, time.Now())
 	require.True(t, ok && cfg.Image != nil, "expected grok-2-image pricing metadata")
 	require.InDelta(t, 0.07, cfg.Image.PricePerImageUsd, 1e-9, "expected image price 0.07")
 	require.Equal(t, 1.0, cfg.Image.SizeMultipliers["1024x1024"], "unexpected xAI multiplier for 1024x1024")
@@ -91,14 +96,14 @@ func TestXAIImagePricingConfig(t *testing.T) {
 
 func TestGeminiImagePricingConfig(t *testing.T) {
 	t.Parallel()
-	cfg, ok := pricing.ResolveModelConfig("gemini-2.5-flash-image", nil, &gemini.Adaptor{})
+	cfg, ok := pricing.ResolveModelConfig("gemini-2.5-flash-image", nil, &gemini.Adaptor{}, time.Now())
 	require.True(t, ok && cfg.Image != nil, "expected gemini-2.5-flash-image pricing metadata")
 	require.InDelta(t, 0.039, cfg.Image.PricePerImageUsd, 1e-9, "expected image price 0.039")
 }
 
 func TestVertexAIImagenPricingConfig(t *testing.T) {
 	t.Parallel()
-	cfg, ok := pricing.ResolveModelConfig("imagen-4.0-generate-001", nil, &vertexai.Adaptor{})
+	cfg, ok := pricing.ResolveModelConfig("imagen-4.0-generate-001", nil, &vertexai.Adaptor{}, time.Now())
 	require.True(t, ok && cfg.Image != nil, "expected imagen-4.0-generate-001 pricing metadata")
 	require.InDelta(t, 0.04, cfg.Image.PricePerImageUsd, 1e-9, "expected image price 0.04")
 	require.Equal(t, 1.0, cfg.Image.SizeMultipliers["1024x1024"], "unexpected imagen multiplier for 1024x1024")

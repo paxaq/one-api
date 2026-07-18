@@ -1,10 +1,12 @@
 package channeltype
 
-import "github.com/songquanpeng/one-api/relay/apitype"
+import "github.com/Laisky/one-api/relay/apitype"
 
 func ToAPIType(channelType int) int {
 	apiType := apitype.OpenAI
 	switch channelType {
+	case Azure:
+		apiType = apitype.Azure
 	case Anthropic:
 		apiType = apitype.Anthropic
 	case ClaudeCompatible:
@@ -55,6 +57,12 @@ func ToAPIType(channelType int) int {
 		apiType = apitype.XAI
 	case Copilot:
 		apiType = apitype.Copilot
+	case Fireworks:
+		apiType = apitype.Fireworks
+	case NVIDIA:
+		apiType = apitype.NVIDIA
+	case Cerebras:
+		apiType = apitype.Cerebras
 	}
 
 	return apiType
@@ -178,6 +186,12 @@ func IdToName(channelType int) string {
 		return "geminiopenaicompatible"
 	case Copilot:
 		return "copilot"
+	case Fireworks:
+		return "fireworks"
+	case NVIDIA:
+		return "nvidia"
+	case Cerebras:
+		return "cerebras"
 	case Dummy:
 		return "dummy"
 	default:

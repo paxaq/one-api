@@ -14,11 +14,11 @@ import (
 	"github.com/Laisky/errors/v2"
 	"github.com/Laisky/zap"
 
-	"github.com/songquanpeng/one-api/common"
-	"github.com/songquanpeng/one-api/common/config"
-	"github.com/songquanpeng/one-api/common/logger"
-	"github.com/songquanpeng/one-api/common/random"
-	"github.com/songquanpeng/one-api/dto"
+	"github.com/Laisky/one-api/common"
+	"github.com/Laisky/one-api/common/config"
+	"github.com/Laisky/one-api/common/logger"
+	"github.com/Laisky/one-api/common/random"
+	"github.com/Laisky/one-api/dto"
 )
 
 var (
@@ -56,9 +56,13 @@ func CacheGetTokenByKey(ctx context.Context, key string) (*Token, error) {
 		if err != nil {
 			return nil, errors.Wrapf(err, "get token by key %s", key)
 		}
-		// Marshal without custom Token.MarshalJSON to keep raw key in cache
-		type plainToken Token
-		jsonBytes, err := json.Marshal(plainToken(token))
+		// Cache the raw token row. With Token.MarshalJSON retired, the default
+		// serialization already keeps the raw stored key (the response-time
+		// prefix now lives in Token.ToResponse, not in json.Marshal) and carries
+		// the internal id, which is exactly what the cache needs. (This file is
+		// allowlisted in the noentityresponse analyzer: marshaling the raw entity
+		// for the internal cache is intentional here.)
+		jsonBytes, err := json.Marshal(token)
 		if err != nil {
 			return nil, errors.Wrapf(err, "marshal token %d for cache", token.Id)
 		}
@@ -100,6 +104,14 @@ func CacheGetUserById(ctx context.Context, id int) (*User, error) {
 	if err != nil {
 		return nil, errors.Wrapf(err, "get user %d from database", id)
 	}
+	// The Redis object cache must persist the internal Id — otherwise a later
+	// cache hit reconstructs a User with Id == 0 (issue #353), which propagates
+	// into ctxkey.Id and surfaces as a 500 "user id is empty". With User.MarshalJSON
+	// retired, json.Marshal(user) is now honest by default: it carries the Id (the
+	// #353 fix) and, because Password/AccessToken/TotpSecret/VerificationCode are
+	// json:"-", it cannot emit secrets — so the old plainUser alias and the manual
+	// scrub are no longer needed. (This file is allowlisted in the noentityresponse
+	// analyzer: marshaling the raw entity for the internal cache is intentional.)
 	payload, err := json.Marshal(user)
 	if err != nil {
 		lg.Warn("failed to marshal user for cache", zap.Int("user_id", id), zap.Error(err))
@@ -158,7 +170,7 @@ func fetchAndUpdateUserQuota(ctx context.Context, id int) (quota int64, err erro
 	lg := logger.FromContext(ctx)
 	quota, err = GetUserQuota(id)
 	if err != nil {
-		return 0, err
+		return 0, errors.Wrap(err, "get user quota")
 	}
 	err = common.RedisSet(ctx, fmt.Sprintf("user_quota:%d", id), fmt.Sprintf("%d", quota), time.Duration(UserId2QuotaCacheSeconds)*time.Second)
 	if err != nil {
@@ -337,8 +349,8 @@ func InitChannelCache() {
 
 	// Iterate over channels that are confirmed to be enabled
 	for _, channel := range channels { // channels are already filtered by status = ChannelStatusEnabled
-		channelGroups := strings.Split(channel.Group, ",")
-		channelModels := strings.Split(channel.Models, ",")
+		channelGroups := channel.GetGroupNames()
+		channelModels := channel.GetSupportedModelNames()
 
 		for _, groupName := range channelGroups {
 			if _, ok := newGroup2model2channels[groupName]; !ok {

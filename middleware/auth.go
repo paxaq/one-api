@@ -30,11 +30,12 @@ import (
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 
-	"github.com/songquanpeng/one-api/common/blacklist"
-	"github.com/songquanpeng/one-api/common/ctxkey"
-	"github.com/songquanpeng/one-api/common/helper"
-	"github.com/songquanpeng/one-api/common/network"
-	"github.com/songquanpeng/one-api/model"
+	"github.com/Laisky/one-api/common/blacklist"
+	"github.com/Laisky/one-api/common/ctxkey"
+	"github.com/Laisky/one-api/common/helper"
+	"github.com/Laisky/one-api/common/idresolve"
+	"github.com/Laisky/one-api/common/network"
+	"github.com/Laisky/one-api/model"
 )
 
 // authHelper is a shared authentication helper function that validates user sessions or access tokens.
@@ -108,6 +109,7 @@ func authHelper(c *gin.Context, minRole int) {
 	// Authentication successful - set user context and continue
 	if userObj != nil {
 		c.Set(ctxkey.UserObj, userObj)
+		c.Set(ctxkey.UserUUID, userObj.UUID)
 	}
 	c.Set(ctxkey.Username, username)
 	c.Set(ctxkey.Role, role)
@@ -164,6 +166,7 @@ func OptionalUserAuth() func(c *gin.Context) {
 				}
 				if userObj != nil {
 					c.Set(ctxkey.UserObj, userObj)
+					c.Set(ctxkey.UserUUID, userObj.UUID)
 				}
 				c.Set(ctxkey.Username, username)
 				c.Set(ctxkey.Role, role)
@@ -207,10 +210,27 @@ func RootAuth() func(c *gin.Context) {
 func TokenAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		ctx := gmw.Ctx(c)
+		lg := gmw.GetLogger(c)
+
 		// Parse the token key from the request (could include channel specification)
-		// Parse the token key from the request (could include channel specification)
-		parts := GetTokenKeyParts(c)
+		parsed := parseTokenKey(c)
+		parts := parsed.Parts
 		key := parts[0]
+
+		// Diagnostic logging for client authentication issues (DEBUG only).
+		// It never logs the raw credential — only which header supplied it,
+		// whether a `Bearer` scheme was present, the number of '-'-separated
+		// parts (a count > 1 triggers admin channel-spec handling and would
+		// 403 a non-admin), and a masked key. This is essential for diagnosing
+		// third-party clients (e.g. GitHub Copilot BYOK) that send the key via
+		// a non-standard header or in an unexpected form.
+		lg.Debug("api token authentication",
+			zap.String("path", c.Request.URL.Path),
+			zap.String("auth_source", string(parsed.Source)),
+			zap.Bool("had_bearer_scheme", parsed.HadScheme),
+			zap.Int("key_parts", len(parts)),
+			zap.String("masked_key", helper.MaskAPIKey(key)),
+		)
 
 		// Validate the API token against the database
 		token, err := model.ValidateUserToken(ctx, key)
@@ -270,17 +290,19 @@ func TokenAuth() func(c *gin.Context) {
 		// Set user and token context for downstream handlers
 		c.Set(ctxkey.UserObj, user)
 		c.Set(ctxkey.Id, user.Id)
+		c.Set(ctxkey.UserUUID, user.UUID)
 		c.Set(ctxkey.Username, user.Username)
 		c.Set(ctxkey.TokenId, token.Id)
+		c.Set(ctxkey.TokenUUID, token.UUID)
 		c.Set(ctxkey.TokenName, token.Name)
 		c.Set(ctxkey.TokenQuota, token.RemainQuota)
 		c.Set(ctxkey.TokenQuotaUnlimited, token.UnlimitedQuota)
 
-		// Handle channel-specific routing (admin feature)
-		// Format: token_key:channel_id allows admins to specify which channel to use
+		// Handle channel-specific routing (admin feature).
+		// Format: token_key-channel_ref allows admins to specify which channel to use.
 		if len(parts) > 1 {
 			if user.Role >= model.RoleAdminUser {
-				cid, err := strconv.Atoi(parts[1])
+				cid, err := resolveSpecificChannelRef(parts[1])
 				if err != nil {
 					AbortWithTokenError(c, http.StatusBadRequest, errors.Errorf("Invalid Channel Id: %s", parts[1]), tokenInfo)
 					return
@@ -295,7 +317,7 @@ func TokenAuth() func(c *gin.Context) {
 
 		// Handle channel specification via URL parameter (for proxy relay)
 		if channelId := c.Param("channelid"); channelId != "" {
-			cid, err := strconv.Atoi(channelId)
+			cid, err := idresolve.Resolve(model.GetChannelIdByUUID, channelId)
 			if err != nil {
 				AbortWithTokenError(c, http.StatusBadRequest, errors.Errorf("Invalid Channel Id: %s", channelId), tokenInfo)
 				return
@@ -306,6 +328,27 @@ func TokenAuth() func(c *gin.Context) {
 
 		c.Next()
 	}
+}
+
+// resolveSpecificChannelRef resolves an admin channel override to an internal channel id.
+// Parameters:
+//   - ref: admin-supplied channel reference, either a legacy integer id or a UUID.
+//
+// Return values:
+//   - int: internal channel primary key.
+//   - error: invalid-reference or not-found error.
+func resolveSpecificChannelRef(ref string) (int, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return 0, idresolve.ErrInvalidRef
+	}
+	if cid, err := strconv.Atoi(ref); err == nil {
+		if cid <= 0 {
+			return 0, idresolve.ErrInvalidRef
+		}
+		return cid, nil
+	}
+	return idresolve.Resolve(model.GetChannelIdByUUID, ref)
 }
 
 // shouldCheckModel determines whether the current endpoint requires model validation.
@@ -333,6 +376,6 @@ func shouldCheckModel(c *gin.Context) bool {
 
 // respondAuthError centralizes error responses for auth failures (DRY, KISS)
 func respondAuthError(c *gin.Context, status int, message string) {
-	c.JSON(status, gin.H{"success": false, "message": message})
+	helper.RespondErrorWithStatus(c, status, errors.New(message))
 	c.Abort()
 }

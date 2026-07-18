@@ -1,5 +1,21 @@
 {
   "dashboard": {
+    "cache": {
+      "cached": "En caché",
+      "hit_rate": "Tasa de aciertos",
+      "model_title": "Tasa de aciertos por modelo",
+      "no_activity": "Sin actividad",
+      "overall": "Global",
+      "regular": "Normal",
+      "section_subtitle": "Tasa de aciertos por entidad a lo largo del tiempo — celdas más oscuras indican mayor tasa",
+      "section_title": "Análisis de aciertos de caché",
+      "showing_top": "Mostrando los {{shown}} primeros de {{total}}",
+      "token_title": "Tasa de aciertos por token",
+      "top_n_label": "Mostrar",
+      "top_n_option": "Top {{count}}",
+      "total": "Total",
+      "user_title": "Tasa de aciertos por usuario"
+    },
     "cards": {
       "avg_cost": "Costo promedio por solicitud",
       "avg_daily": "Promedio diario: {{value}}",
@@ -23,6 +39,7 @@
       "model": "Modelo desconocido",
       "owner": "desconocido",
       "token": "token sin nombre",
+      "tool": "Herramienta desconocida",
       "user": "Usuario desconocido"
     },
     "filters": {
@@ -72,6 +89,9 @@
       "metric_placeholder": "Selecciona el indicador",
       "model_usage": "Uso por modelo",
       "token_usage": "Uso de tokens",
+      "tool_token_usage": "Uso de herramientas por token",
+      "tool_usage": "Uso de herramientas",
+      "tool_user_usage": "Uso de herramientas por usuario",
       "user_usage": "Uso por usuario"
     },
     "title": "Panel",

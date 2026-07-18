@@ -23,7 +23,7 @@
 - **Testing policy:** Create and update unit tests for new features and bug fixes; avoid one‑off scripts; continuously improve test coverage.
 - **Test assertions:** Use `github.com/stretchr/testify/require` for assertions in tests.
 - **Comments requirement:** Every function and interface must have a comment that starts with the function/interface name and describes purpose, parameters, and return values in complete sentences.
-- **Go version and style:** Target **Go 1.25**; use modern Go syntax and features where appropriate.
+- **Go version and style:** Target **Go 1.26**; use modern Go syntax and features where appropriate.
 - **Context propagation:** Thread `context.Context` through call chains whenever feasible to manage lifecycles and cancellations.
 - **Error handling—proximity:** Handle errors as close to their source as possible; never ignore errors.
 - **Error handling—avoid `err == nil` pitfalls:** Avoid patterns that risk shadowing; be explicit and clear when checking errors.
@@ -46,3 +46,4 @@
 - **Completeness:** Exhaustively incorporate requirements and options; resolve conflicts by rule priority and avoid premature conclusions.
 - **Persistence and retries:** Persist intelligently; retry transient errors until a reasonable limit, and change strategy for non‑transient failures.
 - **Action finality:** Only take actions after completing the above reasoning; actions are final once executed.
+- **Sub Agents:** Actively use sub-agents for **parallelism** (dispatch independent subtasks concurrently in a single batch, not sequentially) and **context isolation** (offload searches/sweeps/lookups so their intermediate context never pollutes the main thread); each must follow the same instructions, stay scoped to a well-defined subtask, and return only the **distilled key information** for integration — not raw tool output or full file dumps.
