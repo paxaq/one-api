@@ -1,6 +1,12 @@
 # Agent Instructions
 
 - **English only:** Always output **English** for all code, comments, chat, documents, logs, and UI text regardless of input language.
+- **Git branches (UNIT23 / paxaq):**
+  - **`main`** — mirror of upstream `Laisky/one-api` `main` only. Keep it updated with `git fetch origin && git checkout main && git merge --ff-only origin/main` (or hard-reset when intentional). **Do not** put product-only deploy history or unmerged experiments on `main`. **Do not** deploy `main` to the VPS as production.
+  - **`railway-sync-upstream`** — **product / production line** (VPS). Base everyday product work, deploys, and “prod + our features” here. After an upstream PR is ready, cherry-pick or merge the same fix onto this branch and redeploy.
+  - **Upstream PRs:** branch from **`origin/main`** (or refreshed local `main`), e.g. `git checkout -b feat/foo origin/main`. Push to `paxaq` and open PR against `Laisky/one-api` `main`. Keep the PR scope pure (no VPS-only docs unless relevant).
+  - **Product feature branches:** branch from **`railway-sync-upstream`**, e.g. `git checkout -b feat/bar railway-sync-upstream`, then merge back into `railway-sync-upstream` for deploy.
+  - **Remotes:** `origin` = Laisky; `paxaq` = UNIT23 fork. Prefer `paxaq` for product branches; use `origin` as the upstream source of truth for `main`.
 - **Project purpose:** one‑api must let users call ChatCompletion API, Response API, or Claude Messages API formats and transparently convert among these three formats; ensure all adapters support conversion between the three.
 - **Sensitive local info:** Local tools and debugging sensitive information is stored in `.github/instructions/laisky.instructions.md`; treat it as sensitive and never leak it.
 - **Package manager:** Use **yarn** for package management; avoid `npm` to prevent `yarn.lock` conflicts.
