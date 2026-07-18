@@ -24,8 +24,8 @@ import { useLocation } from 'react-router-dom';
 import * as z from 'zod';
 
 const QUOTA_PER_UNIT_FALLBACK = 500000;
-const PRESET_AMOUNTS = [20, 50, 100, 200, 500] as const;
-const MIN_TOPUP_USD = 20;
+const PRESET_AMOUNTS = [5, 10, 20, 50, 100] as const;
+const MIN_TOPUP_USD = 5;
 
 function readQuotaPerUnit(): number {
   const raw = parseFloat(localStorage.getItem('quota_per_unit') || `${QUOTA_PER_UNIT_FALLBACK}`);

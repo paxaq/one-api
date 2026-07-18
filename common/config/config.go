@@ -1450,7 +1450,8 @@ var (
 	StripeWebhookSecret = env.String("STRIPE_WEBHOOK_SECRET", "")
 
 	// MinTopUpUSD is the minimum freeform USD top-up amount accepted via Stripe.
-	MinTopUpUSD = env.Int("MIN_TOPUP_USD", 20)
+	// Environment variable: MIN_TOPUP_USD. Default: 5.
+	MinTopUpUSD = env.Int("MIN_TOPUP_USD", 5)
 )
 
 // =============================================================================
