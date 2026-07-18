@@ -16,6 +16,22 @@ UNIT23 one-api runs on a self-managed **Oracle Linux aarch64** host, exposed pub
 | Email | Resend · from `oneapi@unit23.xyz` (domain **unit23.xyz** verified in Resend) |
 | Public 80/443 | **Closed** (firewalld + no Caddy); tunnel only |
 | Admin access | SSH / Tailscale (not public HTTP) |
+| Product git branch | **`railway-sync-upstream`** (deploy this; not `main`) |
+
+## Git branches
+
+| Branch | Role |
+|--------|------|
+| `main` | Mirror of **Laisky** `main` only. Use as the base for **upstream PRs**. Do not deploy as production. |
+| `railway-sync-upstream` | **Production / product** line for this VPS (Stripe, Resend, deploy docs, runtime fixes). Day-to-day work and deploys start here. |
+| `feat/*` from `origin/main` | Clean topic branches for PRs to Laisky. |
+| `feat/*` from `railway-sync-upstream` | Product-only work that stays on the fork until cherry-picked or PRd upstream. |
+
+**Workflow sketch**
+
+1. Upstream contribution: `git fetch origin && git checkout -b feat/foo origin/main` → PR to Laisky → cherry-pick onto `railway-sync-upstream` if production needs it.
+2. Product / VPS change: `git checkout railway-sync-upstream && git pull paxaq railway-sync-upstream` → branch or commit → push `paxaq` → rebuild on `kr-arm-2`.
+3. Keep local `main` fast-forwarded to `origin/main` so new upstream PR branches stay clean.
 
 ## Phase 1 status
 
