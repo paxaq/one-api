@@ -16,12 +16,13 @@ import (
 )
 
 // isSensitiveOptionKey reports whether the option key holds a secret value
-// (e.g. tokens, secrets, passwords) and should never be echoed back to the
-// client or overwritten with an empty value submitted by a UI form.
+// (e.g. tokens, secrets, passwords, API keys) and should never be echoed back
+// to the client or overwritten with an empty value submitted by a UI form.
 func isSensitiveOptionKey(key string) bool {
 	return strings.HasSuffix(key, "Token") ||
 		strings.HasSuffix(key, "Secret") ||
-		strings.HasSuffix(key, "Password")
+		strings.HasSuffix(key, "Password") ||
+		strings.HasSuffix(key, "APIKey")
 }
 
 // GetOptions returns the current configuration options excluding sensitive values.
@@ -77,6 +78,14 @@ func UpdateOption(c *gin.Context) {
 			helper.RespondError(c, errors.New("invalid theme"))
 			return
 		}
+	case "EmailProvider":
+		// Normalize and reject typos before they are persisted.
+		val := strings.ToLower(strings.TrimSpace(option.Value))
+		if val != "" && val != "smtp" && val != "resend" {
+			helper.RespondError(c, errors.Errorf("invalid email provider %q (expected \"smtp\", \"resend\", or empty)", val))
+			return
+		}
+		option.Value = val
 	case "GitHubOAuthEnabled":
 		if option.Value == "true" && config.GitHubClientId == "" {
 			helper.RespondError(c, errors.New("Unable to enable GitHub OAuth, please fill in the GitHub Client Id and GitHub Client Secret first!"))
