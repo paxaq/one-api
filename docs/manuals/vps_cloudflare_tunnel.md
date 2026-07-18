@@ -6,9 +6,10 @@ For file layout, rebuild, and backup commands, see [deploy/vps/README.md](../../
 
 ## Goals of Phase 1
 
-1. Leave Railway as the sole always-on host for production.
+1. Move production off Railway onto a VPS (VPS is now the sole production host).
 2. Keep product customizations: Stripe Checkout, Resend email, open theme.
-3. Expose `https://oneapi.unit23api.com` without opening origin 80/443 to the internet.
+3. Expose `https://oneapi.unit23api.com` via Cloudflare Tunnel without opening origin 80/443.
+4. Force browser/API clients to HTTPS at the Cloudflare edge (Always Use HTTPS).
 
 ## Traffic path
 
@@ -26,6 +27,11 @@ DNS record shape:
 - Name: `oneapi`
 - Target: `<tunnel-uuid>.cfargotunnel.com`
 - Proxy: **Proxied** (orange cloud)
+
+HTTPS-only (Cloudflare Dashboard → SSL/TLS → Edge Certificates):
+
+- **Always Use HTTPS** = On (HTTP → 301 to HTTPS)
+- Verified: `http://oneapi.unit23api.com` redirects; `https://` returns 200
 
 ## Host firewall posture
 
