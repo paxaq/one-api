@@ -11,7 +11,7 @@ UNIT23 one-api runs on a self-managed **Oracle Linux aarch64** host, exposed pub
 | Tunnel process | systemd user unit `cloudflared.service` |
 | Database | Postgres 16 (Podman `oneapi-pg`, bind `127.0.0.1:5432`) |
 | Cache | Redis 7 (Podman `oneapi-redis`, bind `127.0.0.1:6379`) |
-| UI theme | `THEME=open` |
+| UI theme | `THEME=modern` (upstream default) |
 | Min Stripe top-up | **$5** (`MIN_TOPUP_USD` / options `MinTopUpUSD`) |
 | Email | Resend · from `oneapi@unit23.xyz` (domain **unit23.xyz** verified in Resend) |
 | Public 80/443 | **Closed** (firewalld + no Caddy); tunnel only |
