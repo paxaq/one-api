@@ -1449,6 +1449,12 @@ var (
 	// StripeWebhookSecret verifies incoming Stripe webhook signatures (whsec_...).
 	StripeWebhookSecret = env.String("STRIPE_WEBHOOK_SECRET", "")
 
+	// StripePublicBaseURL is the trusted public origin for Checkout success/cancel URLs.
+	// Prefer this over request Host headers. Example: https://oneapi.example.com
+	// Environment variable: STRIPE_PUBLIC_BASE_URL
+	// Default: "" (falls back to ServerAddress)
+	StripePublicBaseURL = strings.TrimRight(strings.TrimSpace(env.String("STRIPE_PUBLIC_BASE_URL", "")), "/")
+
 	// MinTopUpUSD is the minimum freeform USD top-up amount accepted via Stripe.
 	// Environment variable: MIN_TOPUP_USD. Default: 5.
 	MinTopUpUSD = env.Int("MIN_TOPUP_USD", 5)

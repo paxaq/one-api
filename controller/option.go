@@ -19,6 +19,9 @@ import (
 // (e.g. tokens, secrets, passwords, API keys) and should never be echoed back
 // to the client or overwritten with an empty value submitted by a UI form.
 func isSensitiveOptionKey(key string) bool {
+	if key == "StripeSecretKey" || key == "StripeWebhookSecret" || key == "ResendAPIKey" {
+		return true
+	}
 	return strings.HasSuffix(key, "Token") ||
 		strings.HasSuffix(key, "Secret") ||
 		strings.HasSuffix(key, "Password") ||
